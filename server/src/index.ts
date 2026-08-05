@@ -64,7 +64,7 @@ function dispatch(peer: Peer, message: ClientMessage) {
   else if (message.type === "leave") registry.removePeer(peer, "peer_left");
   else peer.send('{"type":"pong"}');
 }
-function setCors(request: IncomingMessage, response: ServerResponse) { const origin=request.headers.origin; if(validOrigin(origin)){response.setHeader("access-control-allow-origin",origin!);response.setHeader("vary","Origin");response.setHeader("access-control-allow-headers","content-type");response.setHeader("access-control-allow-methods","GET,POST,OPTIONS");} response.setHeader("cache-control","no-store"); }
+function setCors(request: IncomingMessage, response: ServerResponse) { const origin=request.headers.origin; if(origin&&validOrigin(origin)){response.setHeader("access-control-allow-origin",origin);response.setHeader("vary","Origin");response.setHeader("access-control-allow-headers","content-type");response.setHeader("access-control-allow-methods","GET,POST,OPTIONS");} response.setHeader("cache-control","no-store"); }
 function validOrigin(origin?: string) { return !origin || origin === allowedOrigin || origin.startsWith("http://localhost:"); }
 function clientIp(request: IncomingMessage) { return request.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ?? request.socket.remoteAddress ?? "unknown"; }
 function json(response: ServerResponse, status: number, value: unknown) { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); }
