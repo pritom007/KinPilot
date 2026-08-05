@@ -22,6 +22,8 @@ Trigger a production deploy after changing the value. The Content Security Polic
 
 Open `android/` with Android Studio using JDK 17 and Android SDK 35. Build `parent` and `helper` on Android 12 or later. No Firebase configuration is needed.
 
+GitHub Actions builds debug APKs without using local disk space. Open a pull request that changes Android code to get a `kinpilot-debug-apks` workflow artifact. To publish downloadable APKs on the repository release page, create and publish a GitHub pre-release from the target commit or tag; the `Android APKs` workflow attaches `KinPilot-Parent-debug.apk` and `KinPilot-Helper-debug.apk` to that release. The Android apps use the Maven Central `io.github.webrtc-sdk:android` package for WebRTC classes.
+
 Before installing on family devices:
 
 1. Create and protect a private Android signing key outside the repository.

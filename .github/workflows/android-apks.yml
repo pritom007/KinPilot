@@ -1,0 +1,58 @@
+name: Android APKs
+
+on:
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apks.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-debug-apks:
+    name: Build debug APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build parent and helper debug APKs
+        working-directory: android
+        run: gradle :parent:assembleDebug :helper:assembleDebug
+
+      - name: Collect APKs
+        run: |
+          mkdir -p artifacts
+          cp android/parent/build/outputs/apk/debug/parent-debug.apk artifacts/KinPilot-Parent-debug.apk
+          cp android/helper/build/outputs/apk/debug/helper-debug.apk artifacts/KinPilot-Helper-debug.apk
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kinpilot-debug-apks
+          path: artifacts/*.apk
+          if-no-files-found: error
+
+      - name: Attach APKs to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" artifacts/*.apk --clobber
