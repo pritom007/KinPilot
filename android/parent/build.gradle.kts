@@ -3,7 +3,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("com.google.gms.google-services")
 }
 android {
     namespace = "family.remote.parent"
@@ -21,11 +20,7 @@ android {
 }
 dependencies {
     implementation(project(":protocol"))
-    implementation(platform("com.google.firebase:firebase-bom:33.2.0"))
-    implementation("com.google.firebase:firebase-auth-ktx")
-    implementation("com.google.firebase:firebase-firestore-ktx")
-    implementation("com.google.firebase:firebase-functions-ktx")
-    implementation("com.google.firebase:firebase-appcheck-playintegrity")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("org.webrtc:google-webrtc:1.0.32006")
     implementation("androidx.activity:activity-compose:1.9.1")
     implementation("androidx.core:core-ktx:1.13.1")

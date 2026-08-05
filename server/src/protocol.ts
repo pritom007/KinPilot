@@ -1,0 +1,7 @@
+export const JOIN_WINDOW_MS=10*60*1000;
+export const SESSION_LIFETIME_MS=60*60*1000;
+export const MAX_MESSAGE_BYTES=32*1024;
+export type ClientMessage={type:"create"}|{type:"join";code:string;helperName:string}|{type:"respond";requestId:string;accept:boolean}|{type:"signal";kind:"offer"|"answer"|"ice";payload:string}|{type:"leave"}|{type:"ping"};
+export type ServerMessage={type:"room-created";code:string;expiresAt:number}|{type:"join-request";requestId:string;helperName:string}|{type:"waiting"}|{type:"accepted";expiresAt:number}|{type:"declined"}|{type:"signal";kind:"offer"|"answer"|"ice";payload:string}|{type:"ended";reason:string}|{type:"error";code:string}|{type:"pong"};
+export function normalizeCode(value:string):string{return value.toUpperCase().replace(/[^0-9A-Z]/g,"");}
+export function parseMessage(value:string):ClientMessage|null{try{const m=JSON.parse(value) as Record<string,unknown>;if(m.type==="create"||m.type==="leave"||m.type==="ping")return{type:m.type};if(m.type==="join"&&typeof m.code==="string"&&typeof m.helperName==="string"&&m.helperName.trim().length>0&&m.helperName.length<=60)return{type:"join",code:normalizeCode(m.code),helperName:m.helperName.trim()};if(m.type==="respond"&&typeof m.requestId==="string"&&typeof m.accept==="boolean")return{type:"respond",requestId:m.requestId,accept:m.accept};if(m.type==="signal"&&(m.kind==="offer"||m.kind==="answer"||m.kind==="ice")&&typeof m.payload==="string"&&m.payload.length<=MAX_MESSAGE_BYTES)return{type:"signal",kind:m.kind,payload:m.payload};return null;}catch{return null;}}

@@ -1,38 +1,44 @@
 # Deployment and verification
 
-## Firebase
+## Render rendezvous service
 
-Create separate development and production Firebase projects. Enable Firestore, Authentication (Google and email/password), Functions, Hosting, and App Check. Register `app.kinpilot.parent`, `app.kinpilot.helper`, and the web application. Place each downloaded `google-services.json` in `android/parent/` and `android/helper/`; these project-specific files are intentionally not committed.
+Create a Render Blueprint from this repository. `render.yaml` creates the free `kinpilot-rendezvous` Web Service, builds only the `server` workspace, exposes `/health`, and accepts the production Netlify origin. No database, disk, secret, or payment method is required.
 
-Set the server-side invite pepper with `firebase functions:secrets:set PAIRING_CODE_PEPPER`. Set `TURN_CREDENTIALS_URL` and `TURN_API_TOKEN` the same way. Deploy rules, indexes, functions, and hosting with `firebase deploy`. Configure a Firestore TTL policy on `sessions.deleteAt`; session documents retain metadata for 30 days, while no screen or control payload is stored.
+The free service sleeps after inactivity. The parent app shows a waking message while the first WebSocket connection starts it. Active WebSocket heartbeat traffic keeps it awake during a session. A restart intentionally invalidates every temporary code and session.
 
-For local development, register App Check debug tokens rather than disabling callable enforcement. Add authorized web domains and restrict the Firebase API key to the intended APIs and origins.
+After Render assigns the hostname, use `wss://<render-host>/ws` for both Android's `RendezvousClient.DEFAULT_URL` and Netlify's `VITE_SIGNALING_URL`.
 
-## TURN
+## Netlify browser console
 
-The `getIceServers` callable authenticates the session participant and exchanges the server-only API token for 15-minute relay credentials. Configure `TURN_CREDENTIALS_URL` for a provider endpoint that accepts `{ "ttl": 900, "sessionId": "…" }` and returns `{ "iceServers": [{ "urls": ["turns:…"], "username": "…", "credential": "…" }] }`. Put provider-specific adaptation behind that endpoint. Never bundle the provider master secret in Android or web code.
+The root `netlify.toml` builds the `web` workspace and publishes `web/dist`. Set one production environment variable:
+
+```text
+VITE_SIGNALING_URL=wss://kinpilot-rendezvous.onrender.com/ws
+```
+
+Trigger a production deploy after changing the value. The Content Security Policy permits WebSocket connections only to Render hosts.
 
 ## Android
 
-Open `android/` with Android Studio using JDK 17 and install Android SDK 35. Add the Firebase configuration files, sync Gradle, and run each app on Android 12 or later. During parent setup:
+Open `android/` with Android Studio using JDK 17 and Android SDK 35. Build `parent` and `helper` on Android 12 or later. No Firebase configuration is needed.
 
-1. Sign in and register the parent device.
-2. Read the disclosure and enable the app's Accessibility service.
-3. Allow notifications.
-4. Create a one-time code and pair the helper.
+Before installing on family devices:
 
-For release APKs, use a private signing key stored outside the repository. Test Play Integrity/App Check using the exact release signing certificate.
+1. Create and protect a private Android signing key outside the repository.
+2. Build signed release APKs for both modules.
+3. On the parent phone, enable KinPilot's disclosed Accessibility service and notifications.
+4. Start support, scan the QR or enter its code, confirm the displayed helper name, and accept Android's screen-sharing prompt.
 
-## Security checklist
+## Security and reliability checklist
 
-- Verify unpaired accounts cannot list devices, request sessions, or read signaling.
-- Verify used and expired codes fail, and simultaneous redemption produces only one trusted relationship.
+- Verify invalid and expired codes fail, only one helper can join, and decline closes the pending helper.
 - Verify every new session requires parent acceptance and a fresh MediaProjection system prompt.
-- Verify Stop, screen lock, capture revocation, and process termination end control immediately.
+- Verify the one-hour timer, Stop action, screen lock, capture revocation, service termination, and WebSocket loss end access.
 - Verify password/secure fields reject typing and protected windows are not visible.
-- Verify no SDP, ICE payload, typed text, screen pixels, or control messages enter analytics or application logs.
-- Configure Firebase budget alerts, Functions error alerts, App Check enforcement metrics, and TURN bandwidth alerts.
+- Verify SDP/ICE messages contain no screen content and typed values, screen pixels, and control commands never enter application logs or the rendezvous server.
+- Test unrelated Wi-Fi and cellular networks. Public STUN cannot connect every NAT combination; this free MVP must report those failures clearly.
+- Do not add a static TURN credential to either app. Add short-lived relay credentials later if family networks prove incompatible.
 
 ## Current MVP boundary
 
-Voice, clipboard/file transfer, recording, unattended access, multi-helper concurrency, account recovery UI, and managed-device provisioning are intentionally excluded. Safari and TURN-only connectivity require device testing before family deployment.
+Voice, clipboard/file transfer, recording, unattended access, stored relationships, multi-helper concurrency, and TURN relay are intentionally excluded. Sessions are temporary and cannot survive a Render restart or either peer disconnecting.

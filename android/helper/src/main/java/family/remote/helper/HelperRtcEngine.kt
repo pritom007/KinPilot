@@ -1,33 +1,63 @@
 package family.remote.helper
 
 import android.content.Context
-import android.view.MotionEvent
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.functions.FirebaseFunctions
 import family.remote.protocol.ControlCommand
 import family.remote.protocol.ProtocolJson
+import family.remote.protocol.RendezvousClient
 import kotlinx.serialization.encodeToString
+import org.json.JSONObject
 import org.webrtc.*
-import java.util.UUID
-import java.util.concurrent.atomic.AtomicLong
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
-class HelperRtcEngine(private val context: Context, private val sessionId: String) : AutoCloseable {
-    private val db=FirebaseFirestore.getInstance(); private val uid=requireNotNull(FirebaseAuth.getInstance().currentUser?.uid); private val sequence=AtomicLong(); private val closed=AtomicBoolean(false); private val egl=EglBase.create()
-    private val factory:PeerConnectionFactory; private val peer:PeerConnection; private var channel:DataChannel?=null; private var listener:ListenerRegistration?=null; private var renderer:SurfaceViewRenderer?=null; private var down:Triple<Float,Float,Long>?=null
-    init { PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions()); factory=PeerConnectionFactory.builder().setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext,true,true)).setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext)).createPeerConnectionFactory(); peer=requireNotNull(factory.createPeerConnection(PeerConnection.RTCConfiguration(listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())),Observer())) }
-    fun next()=sequence.incrementAndGet()
-    fun attachRenderer(view:SurfaceViewRenderer){renderer=view;view.init(egl.eglBaseContext,null);view.setEnableHardwareScaler(true);view.setOnTouchListener { v,event -> val x=event.x/v.width;val y=event.y/v.height;when(event.action){MotionEvent.ACTION_DOWN->{down=Triple(x,y,System.currentTimeMillis());true};MotionEvent.ACTION_UP->{down?.let{start->val elapsed=System.currentTimeMillis()-start.third;val distance=kotlin.math.hypot(x-start.first,y-start.second);send(if(distance>.03f)ControlCommand.Swipe(next(),start.first,start.second,x,y,elapsed.coerceIn(50,2000))else if(elapsed>550)ControlCommand.LongPress(next(),x,y)else ControlCommand.Tap(next(),x,y))};down=null;true};else->true} } }
-    fun start(){ FirebaseFunctions.getInstance().getHttpsCallable("getIceServers").call(mapOf("sessionId" to sessionId)).addOnSuccessListener{result->parseIceServers(result.data)?.let{peer.setConfiguration(PeerConnection.RTCConfiguration(it))};listen()}.addOnFailureListener{listen()} }
-    private fun listen(){listener=db.collection("sessions").document(sessionId).collection("signals").whereEqualTo("recipientId",uid).addSnapshotListener{snapshot,_->snapshot?.documentChanges?.forEach{change->if(change.type==com.google.firebase.firestore.DocumentChange.Type.ADDED){val kind=change.document.getString("kind");val payload=change.document.getString("payload")?:return@forEach;when(kind){"offer"->{peer.setRemoteDescription(Sdp{peer.createAnswer(Sdp{answer->peer.setLocalDescription(Sdp{publish("answer",answer.description)},answer)},MediaConstraints())},SessionDescription(SessionDescription.Type.OFFER,payload))};"ice"->decodeIce(payload)?.let(peer::addIceCandidate)}}}}}
-    private fun parseIceServers(data:Any?):List<PeerConnection.IceServer>?{val values=(data as? Map<*,*>)?.get("iceServers") as? List<*>?:return null;val parsed=values.mapNotNull{raw->val map=raw as? Map<*,*>?:return@mapNotNull null;val urls=when(val value=map["urls"]){is String->listOf(value);is List<*>->value.filterIsInstance<String>();else->emptyList()};if(urls.isEmpty())return@mapNotNull null;PeerConnection.IceServer.builder(urls).setUsername(map["username"] as? String?:"").setPassword(map["credential"] as? String?:"").createIceServer()};return listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())+parsed}
-    fun send(command:ControlCommand){val value=ProtocolJson.encodeToString<ControlCommand>(command);channel?.takeIf{it.state()==DataChannel.State.OPEN}?.send(DataChannel.Buffer(java.nio.ByteBuffer.wrap(value.encodeToByteArray()),false))}
-    private fun publish(kind:String,payload:String){db.collection("sessions").document(sessionId).get().addOnSuccessListener{s->val recipient=s.getString("parentOwnerId")?:return@addOnSuccessListener;db.collection("sessions").document(sessionId).collection("signals").document(UUID.randomUUID().toString()).set(mapOf("senderId" to uid,"recipientId" to recipient,"kind" to kind,"payload" to payload,"createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()))}}
-    private fun decodeIce(value:String):IceCandidate?=runCatching{val json=org.json.JSONObject(value);IceCandidate(json.optString("sdpMid"),json.optInt("sdpMLineIndex"),json.getString("candidate"))}.getOrNull()?:run{val p=value.split('|',limit=3);if(p.size==3)IceCandidate(p[0],p[1].toIntOrNull()?:return null,p[2])else null}
-    private inner class Observer:PeerConnection.Observer by BaseObserver(){override fun onIceCandidate(c:IceCandidate)=publish("ice",org.json.JSONObject().put("sdpMid",c.sdpMid).put("sdpMLineIndex",c.sdpMLineIndex).put("candidate",c.sdp).toString());override fun onDataChannel(dc:DataChannel){channel=dc};override fun onAddTrack(receiver:RtpReceiver,streams:Array<out MediaStream>){(receiver.track() as? VideoTrack)?.addSink(renderer)}}
-    override fun close(){if(!closed.compareAndSet(false,true))return;FirebaseFunctions.getInstance().getHttpsCallable("endSession").call(mapOf("sessionId" to sessionId,"reason" to "helper_stopped"));listener?.remove();renderer?.release();channel?.dispose();peer.close();factory.dispose();egl.release()}
+class HelperRtcEngine(private val context: Context, private val client: RendezvousClient) : AutoCloseable {
+    private val sequence = AtomicLong()
+    private val closed = AtomicBoolean(false)
+    private val egl = EglBase.create()
+    private val factory: PeerConnectionFactory
+    private val peer: PeerConnection
+    private var channel: DataChannel? = null
+    private var renderer: SurfaceViewRenderer? = null
+
+    init {
+        PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
+        factory = PeerConnectionFactory.builder()
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
+            .createPeerConnectionFactory()
+        val ice = listOf(
+            PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+        )
+        peer = requireNotNull(factory.createPeerConnection(PeerConnection.RTCConfiguration(ice), Observer()))
+    }
+
+    fun start() {
+        client.signalListener = { kind, payload -> when (kind) {
+            "offer" -> peer.setRemoteDescription(Sdp {
+                peer.createAnswer(Sdp { answer -> peer.setLocalDescription(Sdp { client.signal("answer", answer.description) }, answer) }, MediaConstraints())
+            }, SessionDescription(SessionDescription.Type.OFFER, payload))
+            "ice" -> decodeIce(payload)?.let(peer::addIceCandidate)
+        } }
+    }
+    fun attachRenderer(view: SurfaceViewRenderer) { renderer = view; view.init(egl.eglBaseContext, null); view.setEnableHardwareScaler(true) }
+    fun next() = sequence.incrementAndGet()
+    fun send(command: ControlCommand) { channel?.takeIf { it.state() == DataChannel.State.OPEN }?.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(command).encodeToByteArray()), false)) }
+    private inner class Observer : PeerConnection.Observer by Base() {
+        override fun onIceCandidate(c: IceCandidate) = client.signal("ice", JSONObject().put("sdpMid", c.sdpMid).put("sdpMLineIndex", c.sdpMLineIndex).put("candidate", c.sdp).toString())
+        override fun onDataChannel(dc: DataChannel) { channel = dc }
+        override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) { (receiver.track() as? VideoTrack)?.addSink(renderer) }
+    }
+    private fun decodeIce(value: String) = runCatching { val j=JSONObject(value); IceCandidate(j.optString("sdpMid"),j.optInt("sdpMLineIndex"),j.getString("candidate")) }.getOrNull()
+    override fun close() { if (!closed.compareAndSet(false, true)) return; client.signalListener=null; renderer?.release(); channel?.dispose(); peer.close(); factory.dispose(); egl.release() }
 }
-private open class BaseObserver:PeerConnection.Observer{override fun onSignalingChange(p0:PeerConnection.SignalingState?)=Unit;override fun onIceConnectionChange(p0:PeerConnection.IceConnectionState?)=Unit;override fun onIceConnectionReceivingChange(p0:Boolean)=Unit;override fun onIceGatheringChange(p0:PeerConnection.IceGatheringState?)=Unit;override fun onIceCandidate(p0:IceCandidate?)=Unit;override fun onIceCandidatesRemoved(p0:Array<out IceCandidate>?)=Unit;override fun onAddStream(p0:MediaStream?)=Unit;override fun onRemoveStream(p0:MediaStream?)=Unit;override fun onDataChannel(p0:DataChannel?)=Unit;override fun onRenegotiationNeeded()=Unit;override fun onAddTrack(p0:RtpReceiver?,p1:Array<out MediaStream>?)=Unit}
-private class Sdp(private val ok:(SessionDescription)->Unit):SdpObserver{override fun onCreateSuccess(v:SessionDescription)=ok(v);override fun onSetSuccess()=Unit;override fun onCreateFailure(e:String?)=Unit;override fun onSetFailure(e:String?)=Unit}
+
+private open class Base : PeerConnection.Observer {
+    override fun onSignalingChange(v: PeerConnection.SignalingState?)=Unit; override fun onIceConnectionChange(v: PeerConnection.IceConnectionState?)=Unit
+    override fun onIceConnectionReceivingChange(v:Boolean)=Unit; override fun onIceGatheringChange(v:PeerConnection.IceGatheringState?)=Unit
+    override fun onIceCandidate(v:IceCandidate?)=Unit; override fun onIceCandidatesRemoved(v:Array<out IceCandidate>?)=Unit
+    override fun onAddStream(v:MediaStream?)=Unit; override fun onRemoveStream(v:MediaStream?)=Unit; override fun onDataChannel(v:DataChannel?)=Unit
+    override fun onRenegotiationNeeded()=Unit; override fun onAddTrack(v:RtpReceiver?,s:Array<out MediaStream>?)=Unit
+}
+private class Sdp(private val ok:(SessionDescription)->Unit):SdpObserver { override fun onCreateSuccess(v:SessionDescription)=ok(v);override fun onSetSuccess()=Unit;override fun onCreateFailure(e:String?)=Unit;override fun onSetFailure(e:String?)=Unit }
