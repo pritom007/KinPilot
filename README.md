@@ -21,4 +21,8 @@ Secure windows, password fields, biometrics, and blocked system surfaces are not
 3. Copy `web/.env.example` to `web/.env.local`, set `VITE_SIGNALING_URL=ws://localhost:8787/ws`, and run `npm run dev -w web`.
 4. Open `android/` in Android Studio with JDK 17 and Android SDK 35 to build the parent and helper APKs.
 
+## APK artifacts
+
+GitHub Actions builds the Android debug APKs on pull requests, manual workflow runs, and published GitHub releases. PR runs expose a `kinpilot-debug-apks` artifact. Publishing a pre-release attaches `KinPilot-Parent-debug.apk` and `KinPilot-Helper-debug.apk` to the release page automatically.
+
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render, Netlify, and Android release steps.
