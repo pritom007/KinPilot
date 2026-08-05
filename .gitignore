@@ -1,0 +1,17 @@
+.gradle/
+.idea/
+**/build/
+**/node_modules/
+**/dist/
+**/lib/
+**/*.tsbuildinfo
+.firebase/
+firebase-debug.log
+*.iml
+local.properties
+**/google-services.json
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example

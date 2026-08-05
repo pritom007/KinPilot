@@ -1,0 +1,2 @@
+<resources><style name="Theme.RemoteSupport" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#176B5B</item></style></resources>
+
