@@ -6,14 +6,14 @@ Create a Render Blueprint from this repository. `render.yaml` creates the free `
 
 The free service sleeps after inactivity. The parent app shows a waking message while the first WebSocket connection starts it. Active WebSocket heartbeat traffic keeps it awake during a session. A restart intentionally invalidates every temporary code and session.
 
-After Render assigns the hostname, use `wss://<render-host>/ws` for both Android's `RendezvousClient.DEFAULT_URL` and Netlify's `VITE_SIGNALING_URL`.
+After Render assigns the hostname, use `https://<render-host>` for both Android's `RendezvousClient.DEFAULT_URL` and Netlify's `VITE_SIGNALING_URL`. The clients use short HTTPS polling for the small signaling messages; screen video and controls remain direct WebRTC traffic.
 
 ## Netlify browser console
 
 The root `netlify.toml` builds the `web` workspace and publishes `web/dist`. Set one production environment variable:
 
 ```text
-VITE_SIGNALING_URL=wss://kinpilot-rendezvous.onrender.com/ws
+VITE_SIGNALING_URL=https://kinpilot-rendezvous.onrender.com
 ```
 
 Trigger a production deploy after changing the value. The Content Security Policy permits WebSocket connections only to Render hosts.

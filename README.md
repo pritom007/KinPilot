@@ -6,7 +6,7 @@ KinPilot is consent-first remote assistance for Android 12+. It uses a tiny, sta
 - `android/helper`: native Android remote console.
 - `android/protocol`: shared control protocol and rendezvous client.
 - `web`: browser helper console hosted on Netlify.
-- `server`: in-memory WebSocket rendezvous service hosted on Render.
+- `server`: in-memory HTTPS rendezvous service hosted on Render.
 
 ## Privacy and safety
 
