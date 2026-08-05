@@ -21,7 +21,7 @@ android {
 dependencies {
     implementation(project(":protocol"))
     implementation("com.google.zxing:core:3.5.3")
-    implementation("org.webrtc:google-webrtc:1.0.32006")
+    implementation("io.github.webrtc-sdk:android:144.7559.08")
     implementation("androidx.activity:activity-compose:1.9.1")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")

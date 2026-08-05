@@ -20,7 +20,7 @@ android {
 }
 dependencies {
     implementation(project(":protocol"))
-    implementation("org.webrtc:google-webrtc:1.0.32006")
+    implementation("io.github.webrtc-sdk:android:144.7559.08")
     implementation("androidx.activity:activity-compose:1.9.1")
     implementation("androidx.compose.ui:ui-viewbinding:1.6.8")
     implementation("androidx.core:core-ktx:1.13.1")
