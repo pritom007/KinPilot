@@ -6,7 +6,7 @@
     <application
         android:name=".ParentApplication"
         android:theme="@style/Theme.RemoteSupport"
-        android:label="KinPilot Parent"
+        android:label="KinPilot"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
         <activity android:name=".MainActivity" android:exported="true">
