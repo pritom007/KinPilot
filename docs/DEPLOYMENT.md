@@ -22,6 +22,8 @@ Trigger a production deploy after changing the value. The Content Security Polic
 
 Open `android/` with Android Studio using JDK 17 and Android SDK 35. Build `parent` and `helper` on Android 12 or later. No Firebase configuration is needed.
 
+GitHub Actions builds both debug APKs in CI without using local disk space. Open a pull request that changes Android code to download a `KinPilot-apks-<sha>` workflow artifact containing `KinPilot-Parent-debug.apk`, `KinPilot-Helper-debug.apk`, and a `SHA256SUMS` checksum file. To publish downloadable APKs on the repository release page, create and publish a GitHub release from the target commit or tag; the `Build KinPilot APK` workflow attaches both APKs and the checksums to that release automatically.
+
 Before installing on family devices:
 
 1. Create and protect a private Android signing key outside the repository.

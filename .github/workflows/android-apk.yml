@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   build-apk:
-    name: Build unified APK
+    name: Build Parent and Helper APKs
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -43,29 +43,36 @@ jobs:
           gradle-version: "8.9"
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
-      - name: Build KinPilot APK
+      - name: Build Parent and Helper debug APKs
         working-directory: android
-        run: gradle :parent:assembleDebug --no-daemon --stacktrace
+        run: gradle :parent:assembleDebug :helper:assembleDebug --no-daemon --stacktrace
 
-      - name: Prepare installable APK
+      - name: Collect installable APKs
         run: |
           mkdir -p artifacts
-          cp android/parent/build/outputs/apk/debug/parent-debug.apk artifacts/KinPilot.apk
-          sha256sum artifacts/KinPilot.apk > artifacts/KinPilot.apk.sha256
+          cp android/parent/build/outputs/apk/debug/parent-debug.apk artifacts/KinPilot-Parent-debug.apk
+          cp android/helper/build/outputs/apk/debug/helper-debug.apk artifacts/KinPilot-Helper-debug.apk
+          (cd artifacts && sha256sum KinPilot-Parent-debug.apk KinPilot-Helper-debug.apk > SHA256SUMS)
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KinPilot-${{ github.sha }}
+          name: KinPilot-apks-${{ github.sha }}
           path: |
-            artifacts/KinPilot.apk
-            artifacts/KinPilot.apk.sha256
+            artifacts/KinPilot-Parent-debug.apk
+            artifacts/KinPilot-Helper-debug.apk
+            artifacts/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach APK to GitHub release
+      - name: Attach APKs to GitHub release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" artifacts/KinPilot.apk artifacts/KinPilot.apk.sha256 --clobber
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            artifacts/KinPilot-Parent-debug.apk \
+            artifacts/KinPilot-Helper-debug.apk \
+            artifacts/SHA256SUMS \
+            --clobber
