@@ -1,6 +1,7 @@
 package family.remote.helper
 
 import android.content.Context
+import android.util.Log
 import family.remote.protocol.ControlCommand
 import family.remote.protocol.ProtocolJson
 import family.remote.protocol.RendezvousClient
@@ -25,6 +26,7 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     private val pendingIce = mutableListOf<IceCandidate>()
 
     init {
+        Log.i(TAG, "init")
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
         factory = PeerConnectionFactory.builder()
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
@@ -35,36 +37,50 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         )
         peer = requireNotNull(factory.createPeerConnection(PeerConnection.RTCConfiguration(ice), Observer()))
+        Log.i(TAG, "factory+peer ready")
     }
 
     fun start() {
+        Log.i(TAG, "start: installing signal listener")
         client.signalListener = { kind, payload ->
+            Log.d(TAG, "signal<- kind=$kind len=${payload.length}")
             when (kind) {
                 "offer" -> peer.setRemoteDescription(object : SdpObserver {
                     override fun onCreateSuccess(v: SessionDescription?) = Unit
                     override fun onSetSuccess() {
                         remoteSet = true
+                        Log.i(TAG, "remote offer set; flushing ${pendingIce.size} pending ICE")
                         val buffered = synchronized(pendingIce) { pendingIce.toList().also { pendingIce.clear() } }
                         buffered.forEach { peer.addIceCandidate(it) }
                         peer.createAnswer(Sdp { answer ->
-                            peer.setLocalDescription(Sdp { client.signal("answer", answer.description) }, answer)
+                            Log.i(TAG, "answer created len=${answer.description.length}")
+                            peer.setLocalDescription(object : SdpObserver {
+                                override fun onCreateSuccess(v: SessionDescription?) = Unit
+                                override fun onSetSuccess() {
+                                    Log.i(TAG, "local answer set; signaling to parent")
+                                    client.signal("answer", answer.description)
+                                }
+                                override fun onCreateFailure(e: String?) = Unit
+                                override fun onSetFailure(e: String?) { Log.e(TAG, "setLocalDescription(answer) failed: $e") }
+                            }, answer)
                         }, MediaConstraints())
                     }
                     override fun onCreateFailure(e: String?) = Unit
-                    override fun onSetFailure(e: String?) = Unit
+                    override fun onSetFailure(e: String?) { Log.e(TAG, "setRemoteDescription(offer) failed: $e") }
                 }, SessionDescription(SessionDescription.Type.OFFER, payload))
                 "ice" -> decodeIce(payload)?.let { c ->
-                    if (remoteSet) peer.addIceCandidate(c)
-                    else synchronized(pendingIce) { pendingIce.add(c) }
+                    if (remoteSet) { Log.d(TAG, "addIce immediate"); peer.addIceCandidate(c) }
+                    else { Log.d(TAG, "queue ICE pre-offer"); synchronized(pendingIce) { pendingIce.add(c) } }
                 }
+                else -> Log.w(TAG, "unknown signal kind=$kind")
             }
         }
     }
 
     fun attachRenderer(view: SurfaceViewRenderer) {
+        Log.i(TAG, "attachRenderer init=$rendererInitialised trackPresent=${remoteTrack!=null}")
         renderer = view
         if (!rendererInitialised) { view.init(egl.eglBaseContext, null); view.setEnableHardwareScaler(true); rendererInitialised = true }
-        // If the remote track already arrived before the view was ready, wire it up now.
         remoteTrack?.addSink(view)
     }
 
@@ -76,11 +92,16 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     }
 
     private inner class Observer : PeerConnection.Observer by Base() {
-        override fun onIceCandidate(c: IceCandidate) =
+        override fun onIceCandidate(c: IceCandidate) {
+            Log.d(TAG, "onIceCandidate ->${c.sdpMid}:${c.sdpMLineIndex}")
             client.signal("ice", JSONObject().put("sdpMid", c.sdpMid).put("sdpMLineIndex", c.sdpMLineIndex).put("candidate", c.sdp).toString())
-        override fun onDataChannel(dc: DataChannel) { channel = dc }
+        }
+        override fun onIceConnectionChange(v: PeerConnection.IceConnectionState?) { Log.i(TAG, "iceConn=$v") }
+        override fun onIceGatheringChange(v: PeerConnection.IceGatheringState?) { Log.i(TAG, "iceGather=$v") }
+        override fun onDataChannel(dc: DataChannel) { Log.i(TAG, "onDataChannel state=${dc.state()}"); channel = dc }
         override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
-            val track = receiver.track() as? VideoTrack ?: return
+            val track = receiver.track() as? VideoTrack ?: run { Log.w(TAG, "onAddTrack non-video"); return }
+            Log.i(TAG, "onAddTrack video track=${track.id()} rendererPresent=${renderer!=null}")
             remoteTrack = track
             renderer?.let { track.addSink(it) }
         }
@@ -88,13 +109,15 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
 
     private fun decodeIce(value: String) = runCatching {
         val j = JSONObject(value); IceCandidate(j.optString("sdpMid"), j.optInt("sdpMLineIndex"), j.getString("candidate"))
-    }.getOrNull()
+    }.onFailure { Log.w(TAG, "decodeIce failed: ${it.message}") }.getOrNull()
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        Log.i(TAG, "close")
         client.signalListener = null
         renderer?.release(); channel?.dispose(); peer.close(); factory.dispose(); egl.release()
     }
+    companion object { private const val TAG = "KinPilot/HelperRTC" }
 }
 
 private open class Base : PeerConnection.Observer {
@@ -114,6 +137,6 @@ private open class Base : PeerConnection.Observer {
 private class Sdp(private val ok: (SessionDescription) -> Unit) : SdpObserver {
     override fun onCreateSuccess(v: SessionDescription) = ok(v)
     override fun onSetSuccess() = Unit
-    override fun onCreateFailure(e: String?) = Unit
-    override fun onSetFailure(e: String?) = Unit
+    override fun onCreateFailure(e: String?) { Log.e("KinPilot/HelperRTC", "onCreateFailure: $e") }
+    override fun onSetFailure(e: String?) { Log.e("KinPilot/HelperRTC", "onSetFailure: $e") }
 }

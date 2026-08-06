@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">KinPilot Parent</string>
+    <string name="app_name">KinPilot</string>
     <string name="accessibility_description">Allows a trusted family helper to perform visible taps, navigation, and text entry only during a session you approve.</string>
 </resources>

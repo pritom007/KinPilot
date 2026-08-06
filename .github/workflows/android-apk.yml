@@ -1,0 +1,71 @@
+name: Build KinPilot APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build unified APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Build KinPilot APK
+        working-directory: android
+        run: gradle :parent:assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare installable APK
+        run: |
+          mkdir -p artifacts
+          cp android/parent/build/outputs/apk/debug/parent-debug.apk artifacts/KinPilot.apk
+          sha256sum artifacts/KinPilot.apk > artifacts/KinPilot.apk.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KinPilot-${{ github.sha }}
+          path: |
+            artifacts/KinPilot.apk
+            artifacts/KinPilot.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach APK to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" artifacts/KinPilot.apk artifacts/KinPilot.apk.sha256 --clobber

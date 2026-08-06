@@ -2,6 +2,7 @@ package family.remote.parent.rtc
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import family.remote.parent.ParentSessionState
 import family.remote.parent.control.RemoteControlService
 import family.remote.protocol.*
@@ -21,7 +22,7 @@ class ParentRtcEngine(
     private val client = requireNotNull(ParentSessionState.client)
     private val egl = EglBase.create()
     private val capturer = ScreenCapturerAndroid(projectionData, object : android.media.projection.MediaProjection.Callback() {
-        override fun onStop() = close()
+        override fun onStop() { Log.w(TAG, "MediaProjection stopped"); close() }
     })
     private val factory: PeerConnectionFactory
     private val peer: PeerConnection
@@ -32,6 +33,7 @@ class ParentRtcEngine(
     private val pendingIce = mutableListOf<IceCandidate>()
 
     init {
+        Log.i(TAG, "init sessionId=$sessionId resultCode=$resultCode")
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
         factory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
@@ -43,66 +45,95 @@ class ParentRtcEngine(
                 PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
             )), Observer()))
         source = factory.createVideoSource(capturer.isScreencast)
+        Log.i(TAG, "factory+peer+source ready")
     }
 
     fun start() {
+        Log.i(TAG, "start: installing signal listener, init capturer")
         client.signalListener = { kind, payload ->
+            Log.d(TAG, "signal<- kind=$kind len=${payload.length}")
             when (kind) {
                 "answer" -> peer.setRemoteDescription(object : SdpObserver {
                     override fun onCreateSuccess(v: SessionDescription?) = Unit
                     override fun onSetSuccess() {
                         remoteSet = true
+                        Log.i(TAG, "remote answer set; flushing ${pendingIce.size} pending ICE")
                         val buffered = synchronized(pendingIce) { pendingIce.toList().also { pendingIce.clear() } }
                         buffered.forEach { peer.addIceCandidate(it) }
                     }
                     override fun onCreateFailure(e: String?) = Unit
-                    override fun onSetFailure(e: String?) = Unit
+                    override fun onSetFailure(e: String?) { Log.e(TAG, "setRemoteDescription(answer) failed: $e") }
                 }, SessionDescription(SessionDescription.Type.ANSWER, payload))
                 "ice" -> decodeIce(payload)?.let { c ->
-                    if (remoteSet) peer.addIceCandidate(c)
-                    else synchronized(pendingIce) { pendingIce.add(c) }
+                    if (remoteSet) { Log.d(TAG, "addIce immediate"); peer.addIceCandidate(c) }
+                    else { Log.d(TAG, "queue ICE pre-answer"); synchronized(pendingIce) { pendingIce.add(c) } }
                 }
+                else -> Log.w(TAG, "unknown signal kind=$kind")
             }
         }
         val texture = SurfaceTextureHelper.create("screen-capture", egl.eglBaseContext)
         capturer.initialize(texture, context, source.capturerObserver)
         capturer.startCapture(1280, 720, 15)
+        Log.i(TAG, "capturer.startCapture done")
         peer.addTrack(factory.createVideoTrack("screen", source), listOf("support"))
         channel = peer.createDataChannel("control", DataChannel.Init().apply { ordered = true }).also(::observe)
         peer.createOffer(Sdp { offer ->
-            peer.setLocalDescription(Sdp { client.signal("offer", offer.description) }, offer)
+            Log.i(TAG, "offer created len=${offer.description.length}")
+            peer.setLocalDescription(object : SdpObserver {
+                override fun onCreateSuccess(v: SessionDescription?) = Unit
+                override fun onSetSuccess() {
+                    Log.i(TAG, "local offer set; signaling to helper")
+                    client.signal("offer", offer.description)
+                }
+                override fun onCreateFailure(e: String?) = Unit
+                override fun onSetFailure(e: String?) { Log.e(TAG, "setLocalDescription(offer) failed: $e") }
+            }, offer)
         }, MediaConstraints())
     }
 
     private fun observe(dc: DataChannel) = dc.registerObserver(object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
-        override fun onStateChange() = Unit
+        override fun onStateChange() { Log.i(TAG, "datachannel state=${dc.state()}") }
         override fun onMessage(buffer: DataChannel.Buffer) {
             if (buffer.binary) return
             val bytes = ByteArray(buffer.data.remaining())
             buffer.data.get(bytes)
             val result = runCatching { ProtocolJson.decodeFromString<ControlCommand>(bytes.decodeToString()) }
-                .map(RemoteControlService::dispatch).getOrElse { return }
+                .map(RemoteControlService::dispatch).getOrElse { Log.w(TAG, "control msg decode failed"); return }
             dc.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(result).encodeToByteArray()), false))
         }
     })
 
     private inner class Observer : PeerConnection.Observer by Base() {
-        override fun onIceCandidate(c: IceCandidate) =
+        override fun onIceCandidate(c: IceCandidate) {
+            Log.d(TAG, "onIceCandidate ->${c.sdpMid}:${c.sdpMLineIndex}")
             client.signal("ice", JSONObject().put("sdpMid", c.sdpMid).put("sdpMLineIndex", c.sdpMLineIndex).put("candidate", c.sdp).toString())
-        override fun onDataChannel(dc: DataChannel) { channel = dc; observe(dc) }
+        }
+        override fun onIceConnectionChange(v: PeerConnection.IceConnectionState?) { Log.i(TAG, "iceConn=$v") }
+        override fun onIceGatheringChange(v: PeerConnection.IceGatheringState?) { Log.i(TAG, "iceGather=$v") }
+        override fun onDataChannel(dc: DataChannel) { Log.i(TAG, "onDataChannel"); channel = dc; observe(dc) }
     }
 
     private fun decodeIce(v: String) = runCatching {
         val j = JSONObject(v); IceCandidate(j.optString("sdpMid"), j.optInt("sdpMLineIndex"), j.getString("candidate"))
-    }.getOrNull()
+    }.onFailure { Log.w(TAG, "decodeIce failed: ${it.message}") }.getOrNull()
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        Log.i(TAG, "close")
         client.signalListener = null
+        // Order matters: stop the screen capturer and dispose the source BEFORE
+        // closing the peer, otherwise the native VideoSource can be torn down
+        // while the peer still references it (crashes libjingle on close).
         runCatching { capturer.stopCapture() }
-        capturer.dispose(); channel?.dispose(); peer.close(); source.dispose(); factory.dispose(); egl.release()
+        source.dispose()
+        capturer.dispose()
+        channel?.dispose()
+        peer.close()
+        factory.dispose()
+        egl.release()
     }
+    companion object { private const val TAG = "KinPilot/ParentRTC" }
 }
 
 private open class Base : PeerConnection.Observer {
@@ -122,6 +153,6 @@ private open class Base : PeerConnection.Observer {
 private class Sdp(private val ok: (SessionDescription) -> Unit) : SdpObserver {
     override fun onCreateSuccess(v: SessionDescription) = ok(v)
     override fun onSetSuccess() = Unit
-    override fun onCreateFailure(e: String?) = Unit
-    override fun onSetFailure(e: String?) = Unit
+    override fun onCreateFailure(e: String?) { Log.e("KinPilot/ParentRTC", "onCreateFailure: $e") }
+    override fun onSetFailure(e: String?) { Log.e("KinPilot/ParentRTC", "onSetFailure: $e") }
 }

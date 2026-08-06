@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "KinPilot"
-include(":protocol", ":parent", ":helper")
+include(":protocol", ":parent")
