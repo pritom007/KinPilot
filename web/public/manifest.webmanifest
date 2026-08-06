@@ -1,0 +1,17 @@
+{
+  "name": "KinPilot",
+  "short_name": "KinPilot",
+  "description": "Private, one-time remote support for family. No accounts, no recordings.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef4f1",
+  "theme_color": "#176b5b",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='96' fill='%23176b5b'/><path d='M160 112h48v128l112-128h64l-120 136 128 152h-64L208 264v136h-48z' fill='%23ffffff'/><circle cx='384' cy='128' r='32' fill='%23f5b429'/></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

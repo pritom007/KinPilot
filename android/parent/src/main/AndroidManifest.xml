@@ -3,7 +3,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <application android:name=".ParentApplication" android:theme="@style/Theme.RemoteSupport" android:label="KinPilot Parent">
+    <application
+        android:name=".ParentApplication"
+        android:theme="@style/Theme.RemoteSupport"
+        android:label="KinPilot Parent"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

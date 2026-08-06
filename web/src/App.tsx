@@ -1,2 +1,55 @@
-import{useEffect,useRef,useState}from"react";import{RemoteConsole}from"./RemoteConsole";import{RendezvousClient}from"./rendezvous";
-export default function App(){const[code,setCode]=useState(location.hash.slice(1)),[name,setName]=useState(""),[message,setMessage]=useState(""),[expiresAt,setExpiresAt]=useState<number>();const clientRef=useRef<RendezvousClient>();useEffect(()=>()=>clientRef.current?.close(),[]);if(expiresAt&&clientRef.current)return<RemoteConsole rendezvous={clientRef.current} expiresAt={expiresAt} onEnded={()=>{clientRef.current?.close();clientRef.current=undefined;setExpiresAt(undefined);setMessage("Session ended.");}}/>;const join=async()=>{try{setMessage("Waking the private connection service…");const client=new RendezvousClient();clientRef.current=client;client.onStatus=status=>{if(status==="disconnected"&&!expiresAt)setMessage("Connection service disconnected. Try again.");};client.onMessage=m=>{if(m.type==="waiting")setMessage("Waiting for the parent to approve…");else if(m.type==="accepted")setExpiresAt(m.expiresAt);else if(m.type==="declined")setMessage("The parent declined this request.");else if(m.type==="error")setMessage(m.code==="room_unavailable"?"That code is invalid, used, or expired.":"The request could not be completed.");};await client.join(code,name.trim()||"Family helper");}catch(e){setMessage((e as Error).message);}};return<main className="landing"><h1>KinPilot</h1><p>Enter the one-time code shown on the parent’s phone. Nothing is saved after the session.</p><label>Your name<input value={name} maxLength={60} onChange={e=>setName(e.target.value)} placeholder="Family helper"/></label><label>Support code<input value={code} maxLength={14} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="ABCD-EFGH-JKLM" autoCapitalize="characters"/></label><button disabled={code.replace(/[^0-9A-Z]/gi,"").length!==12} onClick={()=>void join()}>Request access</button><p aria-live="polite">{message}</p><small>The parent must accept and approve Android screen sharing. Sessions end after one hour.</small></main>}
+import{useEffect,useRef,useState}from"react";
+import{RemoteConsole}from"./RemoteConsole";
+import{RendezvousClient}from"./rendezvous";
+
+export default function App(){
+  const[code,setCode]=useState(location.hash.slice(1));
+  const[name,setName]=useState("");
+  const[message,setMessage]=useState("");
+  const[expiresAt,setExpiresAt]=useState<number>();
+  const clientRef=useRef<RendezvousClient>();
+
+  useEffect(()=>()=>clientRef.current?.close(),[]);
+
+  if(expiresAt&&clientRef.current){
+    const client=clientRef.current;
+    return(
+      <RemoteConsole
+        rendezvous={client}
+        expiresAt={expiresAt}
+        onEnded={()=>{clientRef.current?.close();clientRef.current=undefined;setExpiresAt(undefined);setMessage("Session ended.");}}
+      />
+    );
+  }
+
+  const join=async()=>{
+    try{
+      setMessage("Waking the private connection service…");
+      const client=new RendezvousClient();
+      clientRef.current=client;
+      client.onStatus=status=>{if(status==="disconnected"&&!expiresAt)setMessage("Connection service disconnected. Try again.");};
+      client.onMessage=m=>{
+        if(m.type==="waiting")setMessage("Waiting for the parent to approve…");
+        else if(m.type==="accepted")setExpiresAt(m.expiresAt);
+        else if(m.type==="declined")setMessage("The parent declined this request.");
+        else if(m.type==="error")setMessage(m.code==="room_unavailable"?"That code is invalid, used, or expired.":"The request could not be completed.");
+        // "signal" messages are handled by RemoteConsole once it mounts; they
+        // cannot arrive before the parent's screen-capture service starts,
+        // which requires user interaction after acceptance.
+      };
+      await client.join(code,name.trim()||"Family helper");
+    }catch(e){setMessage((e as Error).message);}
+  };
+
+  return(
+    <main className="landing">
+      <h1>KinPilot</h1>
+      <p>Enter the one-time code shown on the parent’s phone. Nothing is saved after the session.</p>
+      <label>Your name<input value={name} maxLength={60} onChange={e=>setName(e.target.value)} placeholder="Family helper"/></label>
+      <label>Support code<input value={code} maxLength={14} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="ABCD-EFGH-JKLM" autoCapitalize="characters"/></label>
+      <button disabled={code.replace(/[^0-9A-Z]/gi,"").length!==12} onClick={()=>void join()}>Request access</button>
+      <p aria-live="polite">{message}</p>
+      <small>The parent must accept and approve Android screen sharing. Sessions end after one hour.</small>
+    </main>
+  );
+}
