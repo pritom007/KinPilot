@@ -3,6 +3,7 @@ name: Build KinPilot APK
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "android/**"
       - ".github/workflows/android-apk.yml"
@@ -11,15 +12,13 @@ on:
       - "android/**"
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: write
 
 concurrency:
   group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build-apk:
@@ -51,7 +50,7 @@ jobs:
         run: |
           mkdir -p artifacts
           cp android/parent/build/outputs/apk/debug/parent-debug.apk artifacts/KinPilot.apk
-          sha256sum artifacts/KinPilot.apk > artifacts/KinPilot.apk.sha256
+          (cd artifacts && sha256sum KinPilot.apk > KinPilot.apk.sha256)
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -63,9 +62,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach APK to GitHub release
-        if: github.event_name == 'release'
+      - name: Create or reuse GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
+
+      - name: Attach APK to GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: gh release upload "$RELEASE_TAG" artifacts/KinPilot.apk artifacts/KinPilot.apk.sha256 --clobber
