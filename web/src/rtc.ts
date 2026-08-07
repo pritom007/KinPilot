@@ -1,4 +1,22 @@
 import{RendezvousClient,type SignalKind}from"./rendezvous";
+export type ControlStatus={ready:boolean;reason?:string};
+export type ParsedControlMessage={kind:"status";status:ControlStatus}|{kind:"result";value:unknown};
+export function sendControlPayload(channel:Pick<RTCDataChannel,"readyState"|"send">|undefined,value:string):boolean{
+  if(channel?.readyState!=="open")return false;
+  try{channel.send(value);return true;}catch{return false;}
+}
+export function parseControlMessage(data:string):ParsedControlMessage|undefined{
+  try{
+    const value=JSON.parse(data) as unknown;
+    if(!value||typeof value!=="object")return undefined;
+    const message=value as{type?:unknown;ready?:unknown;reason?:unknown};
+    if(message.type==="controlStatus"){
+      if(typeof message.ready!=="boolean")return undefined;
+      return{kind:"status",status:{ready:message.ready,...(typeof message.reason==="string"?{reason:message.reason}:{})}};
+    }
+    return{kind:"result",value};
+  }catch{return undefined;}
+}
 export class HelperRtcSession{
   readonly peer:RTCPeerConnection;
   private channel?:RTCDataChannel;
@@ -7,6 +25,7 @@ export class HelperRtcSession{
   private remoteReady=false;
   private _onStream?:(stream:MediaStream)=>void;
   onControlResult?:(value:unknown)=>void;
+  onControlStatus?:(status:ControlStatus)=>void;
   onState?:(state:RTCPeerConnectionState)=>void;
   set onStream(fn:((stream:MediaStream)=>void)|undefined){
     this._onStream=fn;
@@ -40,7 +59,25 @@ export class HelperRtcSession{
       try{await this.peer.addIceCandidate(candidate);}catch{/* ignore */}
     }
   }
-  send(value:string){if(this.channel?.readyState!=="open")throw new Error("Control channel is not connected");this.channel.send(value);}
-  private attachChannel(channel:RTCDataChannel){this.channel=channel;channel.onmessage=e=>{try{this.onControlResult?.(JSON.parse(e.data));}catch{/* No control logs. */}};}
+  send(value:string){
+    const sent=sendControlPayload(this.channel,value);
+    if(!sent)this.onControlStatus?.({ready:false,reason:"control_channel_unavailable"});
+    return sent;
+  }
+  private attachChannel(channel:RTCDataChannel){
+    this.channel=channel;
+    channel.onclose=()=>this.onControlStatus?.({ready:false,reason:"control_channel_unavailable"});
+    channel.onerror=()=>this.onControlStatus?.({ready:false,reason:"control_channel_unavailable"});
+    channel.onmessage=e=>{
+      const parsed=parseControlMessage(String(e.data));
+      if(!parsed)return;
+      if(parsed.kind==="status")this.onControlStatus?.(parsed.status);
+      else{
+        const result=parsed.value as{accepted?:unknown;reason?:unknown};
+        if(result.accepted===false&&result.reason==="accessibility_unavailable")this.onControlStatus?.({ready:false,reason:result.reason});
+        this.onControlResult?.(parsed.value);
+      }
+    };
+  }
   close(){this.channel?.close();this.peer.close();}
 }

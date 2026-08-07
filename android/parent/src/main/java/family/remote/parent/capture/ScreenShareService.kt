@@ -39,6 +39,9 @@ class ScreenShareService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         Log.i(TAG, "startForeground done")
+        if (!RemoteControlService.isAvailable()) {
+            Log.w(TAG, "Accessibility service is unavailable; continuing with screen sharing only")
+        }
         RemoteControlService.beginSession()
         ScreenSessionCoordinator.onForegroundServiceReady(intent)
         return START_NOT_STICKY

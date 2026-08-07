@@ -8,20 +8,22 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
   const pointer=useRef<{x:number;y:number;at:number}>();
   const pendingStream=useRef<MediaStream>();
   const[connection,setConnection]=useState("connecting");
+  const[controlReady,setControlReady]=useState(false);
   const[text,setText]=useState("");
-  const[feedback,setFeedback]=useState("");
+  const[feedback,setFeedback]=useState("Checking remote control availability…");
   const rtc=useMemo(()=>new HelperRtcSession(rendezvous),[rendezvous]);
-  const control=useMemo(()=>new ControlSender(v=>rtc.send(v)),[rtc]);
+  const control=useMemo(()=>new ControlSender(value=>{
+    if(rtc.send(value))return;
+    setControlReady(false);
+    setFeedback("The control connection closed. Wait for the device to reconnect.");
+  }),[rtc]);
 
   useEffect(()=>{
     const attachStream=(stream:MediaStream)=>{
       const el=video.current;
       if(!el){pendingStream.current=stream;return;}
       el.srcObject=stream;
-      // Some browsers (Safari, and Chrome under strict autoplay policy) will not
-      // start playback automatically even with the `autoplay` attribute unless
-      // the element is muted. Force muted+play so the parent's screen actually
-      // appears in the helper view.
+      // Muted playback avoids strict browser autoplay policies blocking the shared screen.
       el.muted=true;
       const attempt=()=>el.play().catch(()=>{/* user gesture may be needed; retry on click */});
       attempt();
@@ -35,9 +37,18 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
         // Re-try play once the media flow is actually up.
         const el=video.current;
         if(el&&el.paused)el.play().catch(()=>undefined);
-      }
+      }else setControlReady(false);
     };
-    rtc.onControlResult=value=>setFeedback((value as{accepted?:boolean;reason?:string}).accepted?"Action sent":`Unavailable: ${(value as{reason?:string}).reason??"unknown"}`);
+    rtc.onControlStatus=status=>{
+      setControlReady(status.ready);
+      setFeedback(status.ready?"Remote control is ready.":"Remote control is unavailable. Ask the device owner to enable KinPilot in Android Accessibility settings.");
+    };
+    rtc.onControlResult=value=>{
+      const result=value as{accepted?:boolean;reason?:string};
+      setFeedback(result.accepted?"Action sent":result.reason==="accessibility_unavailable"
+        ?"Remote control is unavailable. Ask the device owner to enable KinPilot in Android Accessibility settings."
+        :`Unavailable: ${result.reason??"unknown"}`);
+    };
 
     const previous=rendezvous.onMessage;
     rendezvous.onMessage=message=>{
@@ -62,18 +73,23 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
         <div><strong>KinPilot support</strong><span className={`status ${connection}`}>{connection}</span></div>
         <button className="danger" onClick={stop}>End session</button>
       </header>
-      <section className="device-stage" onClick={tapToPlay}>
+      <p className={`control-status ${controlReady?"ready":"unavailable"}`} role="status">
+        {controlReady?"Remote control ready":"Screen viewing only — ask the device owner to enable KinPilot in Android Accessibility settings."}
+      </p>
+      <section className={`device-stage ${controlReady?"":"view-only"}`} onClick={tapToPlay}>
         <video
           ref={video}
           autoPlay
           playsInline
           muted
           onPointerDown={event=>{
+            if(!controlReady)return;
             const p=point(event);
             pointer.current={...p,at:Date.now()};
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerUp={event=>{
+            if(!controlReady){pointer.current=undefined;return;}
             const start=pointer.current;
             if(!start)return;
             const end=point(event),elapsed=Date.now()-start.at,distance=Math.hypot(end.x-start.x,end.y-start.y);
@@ -86,15 +102,15 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
         {connection!=="connected"&&<p className="stage-hint">Waiting for the parent’s screen to appear…</p>}
       </section>
       <nav>
-        <button onClick={()=>control.action("BACK")}>Back</button>
-        <button onClick={()=>control.action("HOME")}>Home</button>
-        <button onClick={()=>control.action("RECENTS")}>Recents</button>
+        <button disabled={!controlReady} onClick={()=>control.action("BACK")}>Back</button>
+        <button disabled={!controlReady} onClick={()=>control.action("HOME")}>Home</button>
+        <button disabled={!controlReady} onClick={()=>control.action("RECENTS")}>Recents</button>
       </nav>
-      <form onSubmit={event=>{event.preventDefault();try{control.setText(text);setText("");}catch(error){setFeedback((error as Error).message);}}}>
+      <form onSubmit={event=>{event.preventDefault();if(!controlReady)return;try{control.setText(text);setText("");}catch(error){setFeedback((error as Error).message);}}}>
         <label>Type into the focused editable field</label>
         <div>
-          <input value={text} maxLength={2000} onChange={event=>setText(event.target.value)} autoComplete="off"/>
-          <button>Send text</button>
+          <input disabled={!controlReady} value={text} maxLength={2000} onChange={event=>setText(event.target.value)} autoComplete="off"/>
+          <button disabled={!controlReady||!text.trim()}>Send text</button>
         </div>
       </form>
       <p aria-live="polite">{feedback}</p>

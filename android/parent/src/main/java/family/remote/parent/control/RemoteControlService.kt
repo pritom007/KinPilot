@@ -8,15 +8,26 @@ import android.view.accessibility.AccessibilityNodeInfo
 import family.remote.protocol.ControlCommand
 import family.remote.protocol.ControlResult
 import family.remote.protocol.ProtocolValidation
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicLong
 
 class RemoteControlService : AccessibilityService() {
     private val lastSequence = AtomicLong(-1)
 
-    override fun onServiceConnected() { instance = this }
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        notifyAvailabilityChanged()
+    }
     override fun onInterrupt() = Unit
     override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) = Unit
-    override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
+    override fun onDestroy() {
+        if (instance === this) {
+            instance = null
+            notifyAvailabilityChanged()
+        }
+        super.onDestroy()
+    }
 
     fun execute(command: ControlCommand): ControlResult {
         ProtocolValidation.validate(command)?.let { return ControlResult(command.sequence, false, it) }
@@ -57,9 +68,23 @@ class RemoteControlService : AccessibilityService() {
     companion object {
         @Volatile private var instance: RemoteControlService? = null
         @Volatile private var sessionActive = false
+        private val availabilityListeners = CopyOnWriteArraySet<(Boolean) -> Unit>()
+
+        fun isAvailable(): Boolean = instance != null
+        fun addAvailabilityListener(listener: (Boolean) -> Unit) {
+            availabilityListeners += listener
+            listener(isAvailable())
+        }
+        fun removeAvailabilityListener(listener: (Boolean) -> Unit) { availabilityListeners -= listener }
         fun beginSession() { sessionActive = true; instance?.lastSequence?.set(-1) }
         fun endSession() { sessionActive = false }
-        fun dispatch(command: ControlCommand): ControlResult = instance?.execute(command) ?: ControlResult(command.sequence, false, "accessibility_unavailable")
+        fun dispatch(command: ControlCommand): ControlResult = instance?.execute(command)
+            ?: ControlResult(command.sequence, false, "accessibility_unavailable")
+
+        private fun notifyAvailabilityChanged() {
+            val available = isAvailable()
+            availabilityListeners.forEach { it(available) }
+        }
     }
 }
 

@@ -3,3 +3,4 @@
 .device-stage{position:relative}.stage-hint{position:absolute;color:#cbd9d4;font-size:.95rem;background:rgba(16,22,20,.72);padding:.5rem .9rem;border-radius:999px;pointer-events:none}
 .landing h1{background:linear-gradient(135deg,#176b5b,#0f4a3f);-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:-.02em}
 .console header strong{display:inline-flex;align-items:center;gap:.4rem}.console header strong::before{content:"";width:14px;height:14px;border-radius:4px;background:linear-gradient(135deg,#176b5b,#f5b429)}
+.control-status{padding:.75rem 1rem;border-radius:12px;margin:1rem 0 0}.control-status.ready{background:#b7efce;color:#124b32}.control-status.unavailable{background:#fff0c7;color:#694c00}.device-stage.view-only video{cursor:default}

@@ -22,11 +22,24 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
     val engine = remember(client) { HelperRtcEngine(context.applicationContext, client) }
     var text by remember { mutableStateOf("") }
     var feedback by remember { mutableStateOf("Connecting securely…") }
+    var controlReady by remember { mutableStateOf(false) }
     var remaining by remember { mutableLongStateOf((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L)) }
 
     DisposableEffect(engine) {
+        engine.onControlStatus = { ready, _ ->
+            controlReady = ready
+            feedback = if (ready) "Remote control is ready"
+            else "Screen viewing only · ask them to enable KinPilot in Accessibility settings"
+        }
+        engine.onControlResult = { result ->
+            feedback = if (result.accepted) "Action completed"
+            else if (result.reason == "accessibility_unavailable") {
+                controlReady = false
+                "Screen viewing only · ask them to enable KinPilot in Accessibility settings"
+            } else "Action unavailable · ${result.reason ?: "unknown error"}"
+        }
         engine.start()
-        onDispose { engine.close() }
+        onDispose { engine.onControlStatus = null; engine.onControlResult = null; engine.close() }
     }
     LaunchedEffect(expiresAt) {
         while (remaining > 0L) {
@@ -81,16 +94,19 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AssistChip(
                 modifier = Modifier.weight(1f),
+                enabled = controlReady,
                 onClick = { feedback = send(engine, ControlCommand.Action.BACK) },
                 label = { Text("Back") }
             )
             AssistChip(
                 modifier = Modifier.weight(1f),
+                enabled = controlReady,
                 onClick = { feedback = send(engine, ControlCommand.Action.HOME) },
                 label = { Text("Home") }
             )
             AssistChip(
                 modifier = Modifier.weight(1f),
+                enabled = controlReady,
                 onClick = { feedback = send(engine, ControlCommand.Action.RECENTS) },
                 label = { Text("Recents") }
             )
@@ -100,14 +116,15 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it.take(2_000) },
+                enabled = controlReady,
                 modifier = Modifier.weight(1f),
                 label = { Text("Type in focused field") },
                 singleLine = true
             )
             Spacer(Modifier.width(8.dp))
-            Button(enabled = text.isNotBlank(), onClick = {
-                feedback = if (engine.send(ControlCommand.SetText(engine.next(), text))) "Text sent" else "Still connecting…"
-                if (feedback == "Text sent") text = ""
+            Button(enabled = controlReady && text.isNotBlank(), onClick = {
+                feedback = if (engine.send(ControlCommand.SetText(engine.next(), text))) "Text requested" else "Control connection unavailable"
+                if (feedback == "Text requested") text = ""
             }) { Text("Send") }
         }
         Text(
@@ -119,7 +136,7 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
 }
 
 private fun send(engine: HelperRtcEngine, action: ControlCommand.Action): String =
-    if (engine.send(ControlCommand.GlobalAction(engine.next(), action))) "Action sent" else "Still connecting…"
+    if (engine.send(ControlCommand.GlobalAction(engine.next(), action))) "Action requested" else "Control connection unavailable"
 
 private fun formatRemaining(milliseconds: Long): String {
     val totalMinutes = milliseconds / 60_000

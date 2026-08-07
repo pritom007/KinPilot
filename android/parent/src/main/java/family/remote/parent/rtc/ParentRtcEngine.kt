@@ -29,6 +29,7 @@ class ParentRtcEngine(
     private val source: VideoSource
     private var channel: DataChannel? = null
     private val closed = AtomicBoolean(false)
+    private val availabilityListener: (Boolean) -> Unit = ::sendControlStatus
     @Volatile private var remoteSet = false
     private val pendingIce = mutableListOf<IceCandidate>()
 
@@ -50,6 +51,7 @@ class ParentRtcEngine(
 
     fun start() {
         Log.i(TAG, "start: installing signal listener, init capturer")
+        RemoteControlService.addAvailabilityListener(availabilityListener)
         client.signalListener = { kind, payload ->
             Log.d(TAG, "signal<- kind=$kind len=${payload.length}")
             when (kind) {
@@ -93,7 +95,10 @@ class ParentRtcEngine(
 
     private fun observe(dc: DataChannel) = dc.registerObserver(object : DataChannel.Observer {
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
-        override fun onStateChange() { Log.i(TAG, "datachannel state=${dc.state()}") }
+        override fun onStateChange() {
+            Log.i(TAG, "datachannel state=${dc.state()}")
+            if (dc.state() == DataChannel.State.OPEN) sendControlStatus(RemoteControlService.isAvailable())
+        }
         override fun onMessage(buffer: DataChannel.Buffer) {
             if (buffer.binary) return
             val bytes = ByteArray(buffer.data.remaining())
@@ -103,6 +108,12 @@ class ParentRtcEngine(
             dc.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(result).encodeToByteArray()), false))
         }
     })
+
+    private fun sendControlStatus(ready: Boolean) {
+        val activeChannel = channel?.takeIf { it.state() == DataChannel.State.OPEN } ?: return
+        val status = ControlStatus(ready = ready, reason = if (ready) null else "accessibility_unavailable")
+        activeChannel.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(status).encodeToByteArray()), false))
+    }
 
     private inner class Observer : PeerConnection.Observer by Base() {
         override fun onIceCandidate(c: IceCandidate) {
@@ -121,6 +132,7 @@ class ParentRtcEngine(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         Log.i(TAG, "close")
+        RemoteControlService.removeAvailabilityListener(availabilityListener)
         client.signalListener = null
         // Order matters: stop the screen capturer and dispose the source BEFORE
         // closing the peer, otherwise the native VideoSource can be torn down

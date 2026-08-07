@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import family.remote.parent.capture.ScreenShareService
+import family.remote.parent.control.RemoteControlService
 import family.remote.protocol.RendezvousClient
 
 object ParentSessionState { @Volatile var client: RendezvousClient? = null }
@@ -130,6 +131,8 @@ class MainActivity : ComponentActivity() {
         var connecting by remember { mutableStateOf(false) }
         var accepted by remember { mutableStateOf(false) }
         var sharing by remember { mutableStateOf(false) }
+        var controlAvailable by remember { mutableStateOf(RemoteControlService.isAvailable()) }
+        val controlAvailabilityListener = remember { { available: Boolean -> runOnUiThread { controlAvailable = available } } }
         val client = remember {
             RendezvousClient(object : RendezvousClient.Listener {
                 override fun onOpen() { runOnUiThread { ParentSessionState.client?.createRoom() } }
@@ -151,7 +154,12 @@ class MainActivity : ComponentActivity() {
         }
         DisposableEffect(client) {
             ParentSessionState.client = client
-            onDispose { client.close(); if (ParentSessionState.client === client) ParentSessionState.client = null }
+            RemoteControlService.addAvailabilityListener(controlAvailabilityListener)
+            onDispose {
+                RemoteControlService.removeAvailabilityListener(controlAvailabilityListener)
+                client.close()
+                if (ParentSessionState.client === client) ParentSessionState.client = null
+            }
         }
 
         val projection = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -176,6 +184,27 @@ class MainActivity : ComponentActivity() {
 
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) {
                 Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = if (controlAvailable) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer
+            ) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (controlAvailable) "Remote control is ready" else "Enable remote control",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (controlAvailable) "Your helper can use tap, swipe, and navigation after you approve screen sharing."
+                        else "Screen sharing works without this, but your helper cannot tap, swipe, or go Back until KinPilot is enabled in Android Accessibility settings."
+                    )
+                    if (!controlAvailable) {
+                        FilledTonalButton(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
+                            Text("Open Accessibility settings")
+                        }
+                    }
+                }
             }
 
             if (code == null) {
@@ -219,7 +248,10 @@ class MainActivity : ComponentActivity() {
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, modifier = Modifier.weight(1f)) { Text("Remote control") }
+                FilledTonalButton(
+                    onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                    modifier = Modifier.weight(1f)
+                ) { Text(if (controlAvailable) "Control settings" else "Enable control") }
                 FilledTonalButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }, modifier = Modifier.weight(1f)) { Text("Notifications") }
             }
             if (code != null) OutlinedButton(onClick = {

@@ -1,10 +1,15 @@
 package family.remote.parent.rtc
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import family.remote.protocol.ControlCommand
+import family.remote.protocol.ControlResult
+import family.remote.protocol.ControlStatus
 import family.remote.protocol.ProtocolJson
 import family.remote.protocol.RendezvousClient
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import org.json.JSONObject
 import org.webrtc.*
@@ -15,6 +20,7 @@ import java.util.concurrent.atomic.AtomicLong
 class HelperRtcEngine(private val context: Context, private val client: RendezvousClient) : AutoCloseable {
     private val sequence = AtomicLong()
     private val closed = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val egl = EglBase.create()
     private val factory: PeerConnectionFactory
     private val peer: PeerConnection
@@ -23,7 +29,10 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     @Volatile private var rendererInitialised = false
     @Volatile private var remoteTrack: VideoTrack? = null
     @Volatile private var remoteSet = false
+    @Volatile private var controlReady = false
     private val pendingIce = mutableListOf<IceCandidate>()
+    var onControlStatus: ((Boolean, String?) -> Unit)? = null
+    var onControlResult: ((ControlResult) -> Unit)? = null
 
     init {
         Log.i(TAG, "init")
@@ -91,10 +100,45 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     fun next() = sequence.incrementAndGet()
 
     fun send(command: ControlCommand): Boolean {
-        val activeChannel = channel?.takeIf { it.state() == DataChannel.State.OPEN } ?: return false
-        return activeChannel.send(DataChannel.Buffer(
+        if (!controlReady) return false
+        val activeChannel = channel?.takeIf { it.state() == DataChannel.State.OPEN }
+        if (activeChannel == null) {
+            updateControlStatus(false, "control_channel_unavailable")
+            return false
+        }
+        val sent = activeChannel.send(DataChannel.Buffer(
             ByteBuffer.wrap(ProtocolJson.encodeToString(command).encodeToByteArray()), false
         ))
+        if (!sent) updateControlStatus(false, "control_channel_unavailable")
+        return sent
+    }
+
+    private fun observeControlChannel(dataChannel: DataChannel) {
+        dataChannel.registerObserver(object : DataChannel.Observer {
+            override fun onBufferedAmountChange(previousAmount: Long) = Unit
+            override fun onStateChange() {
+                Log.i(TAG, "control channel state=${dataChannel.state()}")
+                if (dataChannel.state() != DataChannel.State.OPEN) updateControlStatus(false, "control_channel_unavailable")
+            }
+            override fun onMessage(buffer: DataChannel.Buffer) {
+                if (buffer.binary) return
+                val bytes = ByteArray(buffer.data.remaining())
+                buffer.data.get(bytes)
+                val json = bytes.decodeToString()
+                if (runCatching { JSONObject(json).optString("type") }.getOrNull() == "controlStatus") {
+                    val status = runCatching { ProtocolJson.decodeFromString<ControlStatus>(json) }.getOrNull() ?: return
+                    updateControlStatus(status.ready, status.reason)
+                    return
+                }
+                val result = runCatching { ProtocolJson.decodeFromString<ControlResult>(json) }.getOrNull() ?: return
+                mainHandler.post { onControlResult?.invoke(result) }
+            }
+        })
+    }
+
+    private fun updateControlStatus(ready: Boolean, reason: String?) {
+        controlReady = ready
+        mainHandler.post { onControlStatus?.invoke(ready, reason) }
     }
 
     private inner class Observer : PeerConnection.Observer by HelperPeerObserver() {
@@ -111,6 +155,7 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
         override fun onDataChannel(dataChannel: DataChannel) {
             Log.i(TAG, "onDataChannel state=${dataChannel.state()}")
             channel = dataChannel
+            observeControlChannel(dataChannel)
         }
         override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
             val track = receiver.track() as? VideoTrack ?: return
@@ -128,6 +173,9 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         Log.i(TAG, "close")
+        controlReady = false
+        onControlStatus = null
+        onControlResult = null
         client.signalListener = null
         remoteTrack?.let { track -> renderer?.let(track::removeSink) }
         renderer?.release()

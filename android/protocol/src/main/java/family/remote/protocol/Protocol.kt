@@ -35,6 +35,9 @@ enum class SignalKind { OFFER, ANSWER, ICE }
 data class ClientCapabilities(val protocolVersion: Int = CURRENT_PROTOCOL_VERSION, val video: Boolean = true, val control: Boolean = true, val textInput: Boolean = true, val audio: Boolean = false)
 
 @Serializable
+data class ControlStatus(val type: String = "controlStatus", val ready: Boolean, val reason: String? = null)
+
+@Serializable
 sealed class ControlCommand {
     abstract val sequence: Long
 
