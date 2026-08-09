@@ -1,13 +1,21 @@
 package family.remote.parent
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import family.remote.parent.rtc.HelperRtcEngine
@@ -48,6 +56,9 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
         }
         if (remaining == 0L) onEnd()
     }
+    BackHandler(enabled = controlReady) {
+        feedback = send(engine, ControlCommand.Action.BACK)
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -78,6 +89,18 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
                 AndroidView(
                     factory = { SurfaceViewRenderer(it).also(engine::attachRenderer) },
                     modifier = Modifier.fillMaxSize()
+                )
+                RemoteTouchLayer(
+                    enabled = controlReady,
+                    onTap = { x, y ->
+                        feedback = if (engine.send(ControlCommand.Tap(engine.next(), x, y))) "Tap requested" else "Control connection unavailable"
+                    },
+                    onLongPress = { x, y ->
+                        feedback = if (engine.send(ControlCommand.LongPress(engine.next(), x, y))) "Long press requested" else "Control connection unavailable"
+                    },
+                    onSwipe = { fromX, fromY, toX, toY, durationMs ->
+                        feedback = if (engine.send(ControlCommand.Swipe(engine.next(), fromX, fromY, toX, toY, durationMs))) "Swipe requested" else "Control connection unavailable"
+                    }
                 )
                 Text(
                     feedback,
@@ -137,6 +160,62 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
 
 private fun send(engine: HelperRtcEngine, action: ControlCommand.Action): String =
     if (engine.send(ControlCommand.GlobalAction(engine.next(), action))) "Action requested" else "Control connection unavailable"
+
+@Composable
+private fun RemoteTouchLayer(
+    enabled: Boolean,
+    onTap: (Float, Float) -> Unit,
+    onLongPress: (Float, Float) -> Unit,
+    onSwipe: (Float, Float, Float, Float, Long) -> Unit
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val pointerId = down.id
+                    val start = down.position
+                    val startedAt = System.currentTimeMillis()
+                    var last = start
+                    var moved = false
+                    var longPressSent = false
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                        if (change.positionChanged() && change.positionChange().getDistance() > 0f) {
+                            last = change.position
+                            if ((last - start).getDistance() > viewConfiguration.touchSlop) moved = true
+                            change.consume()
+                        }
+
+                        val elapsed = System.currentTimeMillis() - startedAt
+                        if (!moved && !longPressSent && elapsed >= viewConfiguration.longPressTimeoutMillis) {
+                            val (x, y) = normalized(start)
+                            onLongPress(x, y)
+                            longPressSent = true
+                        }
+
+                        if (change.changedToUp()) {
+                            if (!longPressSent) {
+                                val (startX, startY) = normalized(start)
+                                val (endX, endY) = normalized(change.position)
+                                if (moved) onSwipe(startX, startY, endX, endY, elapsed.coerceIn(50L, 2_000L))
+                                else onTap(startX, startY)
+                            }
+                            change.consume()
+                            break
+                        }
+                    }
+                }
+            }
+    )
+}
+
+private fun androidx.compose.ui.input.pointer.PointerInputScope.normalized(offset: Offset): Pair<Float, Float> =
+    (offset.x / size.width).coerceIn(0f, 1f) to (offset.y / size.height).coerceIn(0f, 1f)
 
 private fun formatRemaining(milliseconds: Long): String {
     val totalMinutes = milliseconds / 60_000

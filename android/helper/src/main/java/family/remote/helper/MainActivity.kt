@@ -1,5 +1,7 @@
 package family.remote.helper
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -54,9 +56,14 @@ class MainActivity : ComponentActivity() {
                 status = "Connecting…"
                 client.connect()
             }) { Text("Request access") }
+            OutlinedButton(onClick = { openLatestRelease() }) { Text("Update from GitHub") }
             Text(status)
         }
     }
 
     companion object { @Volatile private var clientHolder: RendezvousClient? = null }
+
+    private fun openLatestRelease() {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases/latest")))
+    }
 }
