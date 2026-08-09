@@ -137,13 +137,7 @@ class MainActivity : ComponentActivity() {
         var accepted by remember { mutableStateOf(false) }
         var sharing by remember { mutableStateOf(false) }
         var controlAvailable by remember { mutableStateOf(RemoteControlService.isAvailable()) }
-        val leaveScreen: () -> Unit = {
-            if (sharing) {
-                status = "Screen sharing is still active. Use the notification Stop button to end it."
-                moveTaskToBack(true)
-            } else onBack()
-        }
-        BackHandler(onBack = leaveScreen)
+        BackHandler(onBack = onBack)
         val controlAvailabilityListener = remember { { available: Boolean -> runOnUiThread { controlAvailable = available } } }
         val client = remember {
             RendezvousClient(object : RendezvousClient.Listener {
@@ -192,7 +186,7 @@ class MainActivity : ComponentActivity() {
         val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            ScreenHeader("Get support", "You approve every helper and Android always asks before sharing.", leaveScreen)
+            ScreenHeader("Get support", "You approve every helper and Android always asks before sharing.", onBack)
 
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) {
                 Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
