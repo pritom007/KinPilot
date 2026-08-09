@@ -3,6 +3,7 @@ package family.remote.parent
 import android.Manifest
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.Settings
@@ -93,6 +94,11 @@ class MainActivity : ComponentActivity() {
                 accent = MaterialTheme.colorScheme.secondary,
                 onClick = onHelp
             )
+            Spacer(Modifier.height(16.dp))
+            OutlinedButton(
+                onClick = { openLatestRelease() },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Update from GitHub") }
             Spacer(Modifier.height(24.dp))
             Text(
                 "No account · No recording · Sessions expire automatically",
@@ -124,7 +130,6 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun GetSupportScreen(onBack: () -> Unit) {
-        BackHandler(onBack = onBack)
         var code by remember { mutableStateOf<String?>(null) }
         var request by remember { mutableStateOf<Pair<String, String>?>(null) }
         var status by remember { mutableStateOf("Create a private code when you are ready.") }
@@ -132,6 +137,13 @@ class MainActivity : ComponentActivity() {
         var accepted by remember { mutableStateOf(false) }
         var sharing by remember { mutableStateOf(false) }
         var controlAvailable by remember { mutableStateOf(RemoteControlService.isAvailable()) }
+        val leaveScreen: () -> Unit = {
+            if (sharing) {
+                status = "Screen sharing is still active. Use the notification Stop button to end it."
+                moveTaskToBack(true)
+            } else onBack()
+        }
+        BackHandler(onBack = leaveScreen)
         val controlAvailabilityListener = remember { { available: Boolean -> runOnUiThread { controlAvailable = available } } }
         val client = remember {
             RendezvousClient(object : RendezvousClient.Listener {
@@ -180,7 +192,7 @@ class MainActivity : ComponentActivity() {
         val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            ScreenHeader("Get support", "You approve every helper and Android always asks before sharing.", onBack)
+            ScreenHeader("Get support", "You approve every helper and Android always asks before sharing.", leaveScreen)
 
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) {
                 Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -336,6 +348,10 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object { @Volatile private var helperClient: RendezvousClient? = null }
+
+    private fun openLatestRelease() {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases/latest")))
+    }
 }
 
 @Composable
