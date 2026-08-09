@@ -1,12 +1,12 @@
 package family.remote.helper
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -22,25 +22,20 @@ import org.webrtc.SurfaceViewRenderer
     val engine = remember(client) { HelperRtcEngine(context, client) }
     var text by remember { mutableStateOf("") }
     DisposableEffect(engine) { engine.start(); onDispose { engine.close() } }
-    BackHandler {
-        engine.send(ControlCommand.GlobalAction(engine.next(), ControlCommand.Action.BACK))
-    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Remote support")
             Button(onClick = ended, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("End") }
         }
         Text("Temporary session · ends automatically")
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            AndroidView(factory = { SurfaceViewRenderer(it).also(engine::attachRenderer) }, modifier = Modifier.fillMaxSize())
-            RemoteTouchLayer(
-                onTap = { x, y -> engine.send(ControlCommand.Tap(engine.next(), x, y)) },
-                onLongPress = { x, y -> engine.send(ControlCommand.LongPress(engine.next(), x, y)) },
-                onSwipe = { fromX, fromY, toX, toY, durationMs ->
-                    engine.send(ControlCommand.Swipe(engine.next(), fromX, fromY, toX, toY, durationMs))
-                }
-            )
-        }
+        AndroidView(factory = { SurfaceViewRenderer(it).also(engine::attachRenderer) }, modifier = Modifier.weight(1f).fillMaxWidth())
+        RemoteTouchPad(
+            onTap = { x, y -> engine.send(ControlCommand.Tap(engine.next(), x, y)) },
+            onLongPress = { x, y -> engine.send(ControlCommand.LongPress(engine.next(), x, y)) },
+            onSwipe = { fromX, fromY, toX, toY, durationMs ->
+                engine.send(ControlCommand.Swipe(engine.next(), fromX, fromY, toX, toY, durationMs))
+            }
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Button({ engine.send(ControlCommand.GlobalAction(engine.next(), ControlCommand.Action.BACK)) }) { Text("Back") }
             Button({ engine.send(ControlCommand.GlobalAction(engine.next(), ControlCommand.Action.HOME)) }) { Text("Home") }
@@ -54,14 +49,20 @@ import org.webrtc.SurfaceViewRenderer
 }
 
 @Composable
-private fun RemoteTouchLayer(
+private fun RemoteTouchPad(
     onTap: (Float, Float) -> Unit,
     onLongPress: (Float, Float) -> Unit,
     onSwipe: (Float, Float, Float, Float, Long) -> Unit
 ) {
-    Box(
-        Modifier
-            .fillMaxSize()
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(110.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(12.dp)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -100,8 +101,12 @@ private fun RemoteTouchLayer(
                         }
                     }
                 }
-            }
-    )
+            },
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Touch pad: tap, long-press, or drag to control")
+        }
+    }
 }
 
 private fun androidx.compose.ui.input.pointer.PointerInputScope.normalized(offset: Offset): Pair<Float, Float> =
