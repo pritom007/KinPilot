@@ -2,7 +2,7 @@ name: Build KinPilot APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, "codex/**"]
     tags: ["v*"]
     paths:
       - "android/**"

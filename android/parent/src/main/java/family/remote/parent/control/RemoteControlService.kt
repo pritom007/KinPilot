@@ -30,6 +30,10 @@ class RemoteControlService : AccessibilityService() {
         if (instance === this) {
             instance = null
             notifyAvailabilityChanged()
+            if (sessionActive) {
+                endSession()
+                stopService(android.content.Intent(this, family.remote.parent.capture.ScreenShareService::class.java))
+            }
         }
         super.onDestroy()
     }
@@ -116,7 +120,10 @@ class RemoteControlService : AccessibilityService() {
                 val service = instance
                 if (service == null) reply(ControlResult(command.sequence, false, "accessibility_unavailable"))
                 else try { service.execute(command, reply) }
-                catch (_: RuntimeException) { reply(ControlResult(command.sequence, false, "action_not_supported")) }
+                catch (_: RuntimeException) {
+                    service.gesturePending = false
+                    reply(ControlResult(command.sequence, false, "action_not_supported"))
+                }
             }
         }
 
