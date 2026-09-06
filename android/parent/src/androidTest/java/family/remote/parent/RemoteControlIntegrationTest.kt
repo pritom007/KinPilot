@@ -8,6 +8,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiScrollable
+import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import family.remote.parent.control.RemoteControlService
 import family.remote.protocol.ControlCommand
@@ -37,6 +39,12 @@ class RemoteControlIntegrationTest {
             while (!RemoteControlService.isAvailable() && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100)
             assertTrue("Accessibility must bind before actions are tested", RemoteControlService.isAvailable())
             context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+            assertTrue("KinPilot should become foreground", device.wait(Until.hasObject(By.pkg(context.packageName)), 10000))
+            // The role cards extend below the fold on the CI emulator. Scroll only
+            // during setup; the actual action assertions below use our service.
+            if (!device.hasObject(By.text("Enter a code"))) {
+                UiScrollable(UiSelector().scrollable(true)).scrollIntoView(UiSelector().text("Enter a code"))
+            }
             val enter = device.wait(Until.findObject(By.text("Enter a code")), 10000)
             assertNotNull("Home screen should appear", enter)
             instrumentation.runOnMainSync { RemoteControlService.beginSession() }
@@ -57,6 +65,12 @@ class RemoteControlIntegrationTest {
             assertTrue(device.wait(Until.gone(By.pkg(context.packageName)), 5000))
             instrumentation.runOnMainSync { RemoteControlService.endSession() }
             assertEquals("session_not_active", execute(ControlCommand.Tap(6, .5f, .5f)).reason)
+        } catch (failure: Throwable) {
+            val hierarchy = java.io.ByteArrayOutputStream()
+            device.dumpWindowHierarchy(hierarchy)
+            // Only the disposable emulator's synthetic test UI is included.
+            println("Test UI at failure: " + hierarchy.toString("UTF-8"))
+            throw failure
         } finally {
             instrumentation.runOnMainSync { RemoteControlService.endSession() }
             if (oldServices == "null") device.executeShellCommand("settings delete secure enabled_accessibility_services")
