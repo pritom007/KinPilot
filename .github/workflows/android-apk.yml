@@ -44,7 +44,31 @@ jobs:
 
       - name: Build KinPilot APK
         working-directory: android
-        run: gradle :parent:assembleDebug --no-daemon --stacktrace
+        run: gradle :protocol:testDebugUnitTest :parent:assembleDebug :helper:assembleDebug :parent:assembleDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Verify Accessibility actions on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          working-directory: android
+          script: gradle :parent:connectedDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Upload Android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            android/parent/build/reports/androidTests/
+            android/protocol/build/reports/tests/
 
       - name: Prepare installable APK
         run: |

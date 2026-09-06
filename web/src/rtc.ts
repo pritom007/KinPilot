@@ -23,6 +23,8 @@ export class HelperRtcSession{
   private pendingStream?:MediaStream;
   private pendingIce:RTCIceCandidateInit[]=[];
   private remoteReady=false;
+  private statusPoll?:ReturnType<typeof setInterval>;
+  private lastStatus?:ControlStatus;
   private _onStream?:(stream:MediaStream)=>void;
   onControlResult?:(value:unknown)=>void;
   onControlStatus?:(status:ControlStatus)=>void;
@@ -39,7 +41,10 @@ export class HelperRtcSession{
       if(this._onStream)this._onStream(stream);
       else this.pendingStream=stream;
     };
-    this.peer.onconnectionstatechange=()=>this.onState?.(this.peer.connectionState);
+    this.peer.onconnectionstatechange=()=>{
+      if(this.peer.connectionState!=="connected")this.lastStatus=undefined;
+      this.onState?.(this.peer.connectionState);
+    };
     this.peer.ondatachannel=e=>this.attachChannel(e.channel);
     this.peer.onicecandidate=e=>{if(e.candidate)this.rendezvous.sendSignal("ice",JSON.stringify(e.candidate.toJSON()));};
   }
@@ -66,12 +71,22 @@ export class HelperRtcSession{
   }
   private attachChannel(channel:RTCDataChannel){
     this.channel=channel;
+    const probe=()=>sendControlPayload(channel,JSON.stringify({type:"controlStatusRequest"}));
+    channel.onopen=probe;
+    probe();
+    clearInterval(this.statusPoll);
+    this.statusPoll=setInterval(probe,2000);
     channel.onclose=()=>this.onControlStatus?.({ready:false,reason:"control_channel_unavailable"});
     channel.onerror=()=>this.onControlStatus?.({ready:false,reason:"control_channel_unavailable"});
     channel.onmessage=e=>{
       const parsed=parseControlMessage(String(e.data));
       if(!parsed)return;
-      if(parsed.kind==="status")this.onControlStatus?.(parsed.status);
+      if(parsed.kind==="status"){
+        if(this.lastStatus?.ready!==parsed.status.ready||this.lastStatus?.reason!==parsed.status.reason){
+          this.lastStatus=parsed.status;
+          this.onControlStatus?.(parsed.status);
+        }
+      }
       else{
         const result=parsed.value as{accepted?:unknown;reason?:unknown};
         if(result.accepted===false&&result.reason==="accessibility_unavailable")this.onControlStatus?.({ready:false,reason:result.reason});
@@ -79,5 +94,5 @@ export class HelperRtcSession{
       }
     };
   }
-  close(){this.channel?.close();this.peer.close();}
+  close(){clearInterval(this.statusPoll);this.channel?.close();this.peer.close();}
 }

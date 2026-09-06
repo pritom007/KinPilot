@@ -17,7 +17,14 @@ object ScreenSessionCoordinator {
         active = true
         Log.i(TAG, "engine started")
     }
-    fun stop(reason: String) { Log.i(TAG, "stop reason=$reason active=$active"); engine?.close(); engine = null; if (active) { active = false; SessionEvents.listener?.invoke(reason) } }
+    fun stop(reason: String) {
+        val previous = engine
+        engine = null
+        val wasActive = active
+        active = false
+        previous?.close()
+        if (wasActive) SessionEvents.listener?.invoke(reason)
+    }
     private const val TAG = "KinPilot/ScreenSession"
 }
 

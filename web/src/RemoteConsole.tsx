@@ -1,5 +1,5 @@
 import{useEffect,useMemo,useRef,useState}from"react";
-import{ControlSender}from"./control";
+import{ControlSender,videoPoint}from"./control";
 import{RendezvousClient}from"./rendezvous";
 import{HelperRtcSession}from"./rtc";
 
@@ -41,11 +41,11 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
     };
     rtc.onControlStatus=status=>{
       setControlReady(status.ready);
-      setFeedback(status.ready?"Remote control is ready.":"Remote control is unavailable. Ask the device owner to enable KinPilot in Android Accessibility settings.");
+      setFeedback(status.ready?"Remote control is ready.":status.reason==="accessibility_unavailable"?"Ask the device owner to enable KinPilot in Android Accessibility settings.":"Waiting for the control connection…");
     };
     rtc.onControlResult=value=>{
       const result=value as{accepted?:boolean;reason?:string};
-      setFeedback(result.accepted?"Action sent":result.reason==="accessibility_unavailable"
+      setFeedback(result.accepted?"Action completed":result.reason==="accessibility_unavailable"
         ?"Remote control is unavailable. Ask the device owner to enable KinPilot in Android Accessibility settings."
         :`Unavailable: ${result.reason??"unknown"}`);
     };
@@ -62,7 +62,7 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
 
   const point=(event:React.PointerEvent<HTMLVideoElement>)=>{
     const rect=event.currentTarget.getBoundingClientRect();
-    return{x:(event.clientX-rect.left)/rect.width,y:(event.clientY-rect.top)/rect.height};
+    return videoPoint(event.clientX-rect.left,event.clientY-rect.top,rect.width,rect.height,event.currentTarget.videoWidth,event.currentTarget.videoHeight);
   };
   const stop=()=>{rtc.close();rendezvous.close();onEnded();};
   const tapToPlay=()=>{const el=video.current;if(el&&el.paused)el.play().catch(()=>undefined);};
@@ -74,7 +74,7 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
         <button className="danger" onClick={stop}>End session</button>
       </header>
       <p className={`control-status ${controlReady?"ready":"unavailable"}`} role="status">
-        {controlReady?"Remote control ready":"Screen viewing only — ask the device owner to enable KinPilot in Android Accessibility settings."}
+        {controlReady?"Remote control ready":feedback}
       </p>
       <section className={`device-stage ${controlReady?"":"view-only"}`} onClick={tapToPlay}>
         <video
@@ -85,6 +85,7 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
           onPointerDown={event=>{
             if(!controlReady)return;
             const p=point(event);
+            if(!p)return;
             pointer.current={...p,at:Date.now()};
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
@@ -92,12 +93,16 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
             if(!controlReady){pointer.current=undefined;return;}
             const start=pointer.current;
             if(!start)return;
-            const end=point(event),elapsed=Date.now()-start.at,distance=Math.hypot(end.x-start.x,end.y-start.y);
+            const end=point(event);
+            pointer.current=undefined;
+            if(!end)return;
+            const elapsed=Date.now()-start.at,distance=Math.hypot(end.x-start.x,end.y-start.y);
             if(distance>.03)control.swipe(start.x,start.y,end.x,end.y,elapsed);
             else if(elapsed>550)control.longPress(end.x,end.y);
             else control.tap(end.x,end.y);
             pointer.current=undefined;
           }}
+          onPointerCancel={()=>{pointer.current=undefined;}}
         />
         {connection!=="connected"&&<p className="stage-hint">Waiting for the parent’s screen to appear…</p>}
       </section>

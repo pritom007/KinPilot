@@ -11,14 +11,18 @@ android {
         applicationId = "app.kinpilot.parent"
         minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
     kotlinOptions { jvmTarget = "21" }
 }
 dependencies {
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     implementation(project(":protocol"))
     implementation("com.google.zxing:core:3.5.3")
     // google-webrtc:1.0.32006 was removed from Google Maven; using the

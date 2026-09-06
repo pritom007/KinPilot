@@ -3,6 +3,10 @@ package family.remote.parent.rtc
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
+import android.view.WindowManager
+import android.hardware.display.DisplayManager
 import family.remote.parent.ParentSessionState
 import family.remote.parent.control.RemoteControlService
 import family.remote.protocol.*
@@ -22,13 +26,30 @@ class ParentRtcEngine(
     private val client = requireNotNull(ParentSessionState.client)
     private val egl = EglBase.create()
     private val capturer = ScreenCapturerAndroid(projectionData, object : android.media.projection.MediaProjection.Callback() {
-        override fun onStop() { Log.w(TAG, "MediaProjection stopped"); close() }
+        override fun onStop() {
+            Handler(Looper.getMainLooper()).post {
+                context.stopService(Intent(context, family.remote.parent.capture.ScreenShareService::class.java))
+            }
+        }
     })
     private val factory: PeerConnectionFactory
     private val peer: PeerConnection
     private val source: VideoSource
     private var channel: DataChannel? = null
     private val closed = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var texture: SurfaceTextureHelper? = null
+    private val displayManager = context.getSystemService(DisplayManager::class.java)
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (!closed.get() && displayId == android.view.Display.DEFAULT_DISPLAY) {
+                val (width, height) = captureSize()
+                capturer.changeCaptureFormat(width, height, 15)
+            }
+        }
+    }
     private val availabilityListener: (Boolean) -> Unit = ::sendControlStatus
     @Volatile private var remoteSet = false
     private val pendingIce = mutableListOf<IceCandidate>()
@@ -73,12 +94,15 @@ class ParentRtcEngine(
                 else -> Log.w(TAG, "unknown signal kind=$kind")
             }
         }
-        val texture = SurfaceTextureHelper.create("screen-capture", egl.eglBaseContext)
+        texture = SurfaceTextureHelper.create("screen-capture", egl.eglBaseContext)
         capturer.initialize(texture, context, source.capturerObserver)
-        capturer.startCapture(1280, 720, 15)
+        val (width, height) = captureSize()
+        capturer.startCapture(width, height, 15)
+        displayManager.registerDisplayListener(displayListener, mainHandler)
         Log.i(TAG, "capturer.startCapture done")
         peer.addTrack(factory.createVideoTrack("screen", source), listOf("support"))
-        channel = peer.createDataChannel("control", DataChannel.Init().apply { ordered = true }).also(::observe)
+        channel = peer.createDataChannel("control", DataChannel.Init().apply { ordered = true })
+        channel?.let(::observe)
         peer.createOffer(Sdp { offer ->
             Log.i(TAG, "offer created len=${offer.description.length}")
             peer.setLocalDescription(object : SdpObserver {
@@ -97,22 +121,43 @@ class ParentRtcEngine(
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
         override fun onStateChange() {
             Log.i(TAG, "datachannel state=${dc.state()}")
-            if (dc.state() == DataChannel.State.OPEN) sendControlStatus(RemoteControlService.isAvailable())
+            mainHandler.post { if (!closed.get() && dc.state() == DataChannel.State.OPEN) sendControlStatus(RemoteControlService.isAvailable()) }
         }
         override fun onMessage(buffer: DataChannel.Buffer) {
             if (buffer.binary) return
+            if (buffer.data.remaining() > 16384) return
             val bytes = ByteArray(buffer.data.remaining())
             buffer.data.get(bytes)
-            val result = runCatching { ProtocolJson.decodeFromString<ControlCommand>(bytes.decodeToString()) }
-                .map(RemoteControlService::dispatch).getOrElse { Log.w(TAG, "control msg decode failed"); return }
-            dc.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(result).encodeToByteArray()), false))
+            // Leave WebRTC's callback thread before calling Android services or sending a reply.
+            mainHandler.post {
+                if (closed.get()) return@post
+                val json = bytes.decodeToString()
+                if (runCatching { JSONObject(json).optString("type") }.getOrNull() == "controlStatusRequest") {
+                    sendControlStatus(RemoteControlService.isAvailable())
+                    return@post
+                }
+                val command = runCatching { ProtocolJson.decodeFromString<ControlCommand>(json) }.getOrNull() ?: return@post
+                RemoteControlService.dispatch(command) { result ->
+                    if (!closed.get() && dc.state() == DataChannel.State.OPEN) {
+                        dc.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(result).encodeToByteArray()), false))
+                    }
+                }
+            }
         }
     })
 
     private fun sendControlStatus(ready: Boolean) {
+        if (closed.get()) return
         val activeChannel = channel?.takeIf { it.state() == DataChannel.State.OPEN } ?: return
         val status = ControlStatus(ready = ready, reason = if (ready) null else "accessibility_unavailable")
         activeChannel.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(status).encodeToByteArray()), false))
+    }
+
+    private fun captureSize(): Pair<Int, Int> {
+        val bounds = context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
+        val scale = minOf(1f, 1280f / maxOf(bounds.width(), bounds.height()))
+        return maxOf(2, (bounds.width() * scale).toInt() / 2 * 2) to
+            maxOf(2, (bounds.height() * scale).toInt() / 2 * 2)
     }
 
     private inner class Observer : PeerConnection.Observer by Base() {
@@ -132,6 +177,9 @@ class ParentRtcEngine(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         Log.i(TAG, "close")
+        RemoteControlService.endSession()
+        displayManager.unregisterDisplayListener(displayListener)
+        mainHandler.removeCallbacksAndMessages(null)
         RemoteControlService.removeAvailabilityListener(availabilityListener)
         client.signalListener = null
         // Order matters: stop the screen capturer and dispose the source BEFORE
@@ -140,6 +188,7 @@ class ParentRtcEngine(
         runCatching { capturer.stopCapture() }
         source.dispose()
         capturer.dispose()
+        texture?.dispose()
         channel?.dispose()
         peer.close()
         factory.dispose()

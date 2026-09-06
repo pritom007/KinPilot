@@ -9,6 +9,7 @@ import family.remote.protocol.ControlResult
 import family.remote.protocol.ControlStatus
 import family.remote.protocol.ProtocolJson
 import family.remote.protocol.RendezvousClient
+import family.remote.protocol.RemoteTouchInput
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import org.json.JSONObject
@@ -30,6 +31,17 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     @Volatile private var remoteTrack: VideoTrack? = null
     @Volatile private var remoteSet = false
     @Volatile private var controlReady = false
+    @Volatile private var frameSize = 0 to 0
+    @Volatile private var lastStatus: Pair<Boolean, String?>? = null
+    private val pendingResults = mutableMapOf<Long, Runnable>()
+    private val statusProbe = object : Runnable {
+        override fun run() {
+            if (closed.get()) return
+            channel?.takeIf { it.state() == DataChannel.State.OPEN }?.send(DataChannel.Buffer(
+                ByteBuffer.wrap("{\"type\":\"controlStatusRequest\"}".encodeToByteArray()), false))
+            mainHandler.postDelayed(this, 2000)
+        }
+    }
     private val pendingIce = mutableListOf<IceCandidate>()
     var onControlStatus: ((Boolean, String?) -> Unit)? = null
     var onControlResult: ((ControlResult) -> Unit)? = null
@@ -89,12 +101,19 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     fun attachRenderer(view: SurfaceViewRenderer) {
         renderer = view
         if (!rendererInitialised) {
-            view.init(egl.eglBaseContext, null)
+            view.init(egl.eglBaseContext, object : RendererCommon.RendererEvents {
+                override fun onFirstFrameRendered() = Unit
+                override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
+                    frameSize = if (rotation % 180 == 0) width to height else height to width
+                }
+            })
+            view.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             view.setEnableHardwareScaler(true)
             view.setMirror(false)
             rendererInitialised = true
         }
         remoteTrack?.addSink(view)
+        RemoteTouchInput.attach(view, { frameSize }, { controlReady }, ::next, ::send)
     }
 
     fun next() = sequence.incrementAndGet()
@@ -110,6 +129,14 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
             ByteBuffer.wrap(ProtocolJson.encodeToString(command).encodeToByteArray()), false
         ))
         if (!sent) updateControlStatus(false, "control_channel_unavailable")
+        else {
+            val timeout = Runnable {
+                pendingResults.remove(command.sequence)
+                onControlResult?.invoke(ControlResult(command.sequence, false, "control_response_timeout"))
+            }
+            pendingResults[command.sequence] = timeout
+            mainHandler.postDelayed(timeout, 5000)
+        }
         return sent
     }
 
@@ -131,13 +158,20 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
                     return
                 }
                 val result = runCatching { ProtocolJson.decodeFromString<ControlResult>(json) }.getOrNull() ?: return
-                mainHandler.post { onControlResult?.invoke(result) }
+                mainHandler.post {
+                    pendingResults.remove(result.sequence)?.let(mainHandler::removeCallbacks)
+                    onControlResult?.invoke(result)
+                }
             }
         })
+        mainHandler.removeCallbacks(statusProbe)
+        mainHandler.post(statusProbe)
     }
 
     private fun updateControlStatus(ready: Boolean, reason: String?) {
         controlReady = ready
+        if (lastStatus == (ready to reason)) return
+        lastStatus = ready to reason
         mainHandler.post { onControlStatus?.invoke(ready, reason) }
     }
 
@@ -174,6 +208,8 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
         if (!closed.compareAndSet(false, true)) return
         Log.i(TAG, "close")
         controlReady = false
+        mainHandler.removeCallbacksAndMessages(null)
+        pendingResults.clear()
         onControlStatus = null
         onControlResult = null
         client.signalListener = null
