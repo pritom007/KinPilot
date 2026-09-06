@@ -54,7 +54,14 @@ class ScreenShareService : Service() {
             Log.w(TAG, "Accessibility service is unavailable; continuing with screen sharing only")
         }
         RemoteControlService.beginSession()
-        ScreenSessionCoordinator.onForegroundServiceReady(intent)
+        try { ScreenSessionCoordinator.onForegroundServiceReady(intent) }
+        catch (_: RuntimeException) {
+            RemoteControlService.endSession()
+            ScreenSessionCoordinator.stop("screen_capture_failed")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         handler.postDelayed({ stopSession() }, 60 * 60 * 1000L)
         return START_NOT_STICKY
     }

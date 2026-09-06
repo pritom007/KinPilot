@@ -25,13 +25,11 @@ class ParentRtcEngine(
 ) : AutoCloseable {
     private val client = requireNotNull(ParentSessionState.client)
     private val egl = EglBase.create()
-    private val capturer = ScreenCapturerAndroid(projectionData, object : android.media.projection.MediaProjection.Callback() {
-        override fun onStop() {
-            Handler(Looper.getMainLooper()).post {
-                context.stopService(Intent(context, family.remote.parent.capture.ScreenShareService::class.java))
-            }
+    private val capturer = family.remote.parent.capture.DisplayCapturer(projectionData) {
+        Handler(Looper.getMainLooper()).post {
+            context.stopService(Intent(context, family.remote.parent.capture.ScreenShareService::class.java))
         }
-    })
+    }
     private val factory: PeerConnectionFactory
     private val peer: PeerConnection
     private val source: VideoSource
@@ -66,7 +64,7 @@ class ParentRtcEngine(
                 PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
                 PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
             )), Observer()))
-        source = factory.createVideoSource(capturer.isScreencast)
+        source = factory.createVideoSource(capturer.isScreencast())
         Log.i(TAG, "factory+peer+source ready")
     }
 

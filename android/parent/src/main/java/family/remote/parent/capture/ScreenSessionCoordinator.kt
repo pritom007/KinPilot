@@ -13,8 +13,9 @@ object ScreenSessionCoordinator {
         val resultCode = intent.getIntExtra(ScreenShareService.EXTRA_RESULT_CODE, 0)
         val sessionId = requireNotNull(intent.getStringExtra("sessionId"))
         Log.i(TAG, "building engine sessionId=$sessionId resultCode=$resultCode")
-        engine = ParentRtcEngine(AppContext.value, sessionId, resultCode, projectionData).also { it.start() }
+        engine = ParentRtcEngine(AppContext.value, sessionId, resultCode, projectionData)
         active = true
+        engine?.start()
         Log.i(TAG, "engine started")
     }
     fun stop(reason: String) {

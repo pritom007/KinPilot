@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 onClick = { openLatestRelease() },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Update from GitHub") }
+            Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(24.dp))
             Text(
                 "No account · No recording · Sessions expire automatically",
@@ -367,7 +368,7 @@ class MainActivity : ComponentActivity() {
     companion object { @Volatile private var helperClient: RendezvousClient? = null }
 
     private fun openLatestRelease() {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases/latest")))
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases")))
     }
 }
 
