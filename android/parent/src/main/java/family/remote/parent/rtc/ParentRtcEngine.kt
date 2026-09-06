@@ -92,8 +92,9 @@ class ParentRtcEngine(
                 else -> Log.w(TAG, "unknown signal kind=$kind")
             }
         }
-        texture = SurfaceTextureHelper.create("screen-capture", egl.eglBaseContext)
-        capturer.initialize(texture, context, source.capturerObserver)
+        val captureTexture = requireNotNull(SurfaceTextureHelper.create("screen-capture", egl.eglBaseContext))
+        texture = captureTexture
+        capturer.initialize(captureTexture, context, source.capturerObserver)
         val (width, height) = captureSize()
         capturer.startCapture(width, height, 15)
         displayManager.registerDisplayListener(displayListener, mainHandler)

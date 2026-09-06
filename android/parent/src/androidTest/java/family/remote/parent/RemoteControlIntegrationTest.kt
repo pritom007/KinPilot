@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
 class RemoteControlIntegrationTest {
     @Test fun executesRemoteActionsAndRejectsReplayAndEndedSession() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        Configurator.getInstance().uiAutomationFlags = UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES
+        Configurator.getInstance().setUiAutomationFlags(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
         val device = UiDevice.getInstance(instrumentation)
         val context = instrumentation.targetContext
         val component = "${context.packageName}/family.remote.parent.control.RemoteControlService"
