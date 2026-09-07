@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.app.KeyguardManager
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import family.remote.protocol.ControlCommand
 import family.remote.protocol.ControlResult
@@ -25,7 +26,7 @@ class RemoteControlService : AccessibilityService() {
         notifyAvailabilityChanged()
     }
     override fun onInterrupt() = Unit
-    override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onDestroy() {
         if (instance === this) {
             instance = null
@@ -89,11 +90,31 @@ class RemoteControlService : AccessibilityService() {
     }
 
     private fun setFocusedText(text: String): Boolean {
-        val node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
-        if (!node.isEditable || node.isPassword) return false
+        // AccessibilityService.findFocus() is unreliable for some Compose text
+        // fields. Resolve the input focus from the active window as a fallback,
+        // while still requiring the target to be genuinely focused and editable.
+        val node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?.takeIf(::isSafeTextTarget)
+            ?: findFocusedEditable(rootInActiveWindow)
+            ?: return false
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
+
+    private fun findFocusedEditable(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (root == null) return null
+        val pending = ArrayDeque<AccessibilityNodeInfo>().apply { add(root) }
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            if (isSafeTextTarget(node)) return node
+            for (index in 0 until node.childCount) node.getChild(index)?.let(pending::addLast)
+        }
+        return null
+    }
+
+    private fun isSafeTextTarget(node: AccessibilityNodeInfo): Boolean =
+        node.isFocused && node.isEditable && !node.isPassword &&
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
 
     companion object {
         @Volatile private var instance: RemoteControlService? = null
