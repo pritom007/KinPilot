@@ -62,6 +62,13 @@ sealed class ControlCommand {
 @Serializable
 data class ControlResult(val sequence: Long, val accepted: Boolean, val reason: String? = null)
 
+fun controlStatusMessage(reason: String?): String = when (reason) {
+    "accessibility_unavailable" -> "Ask the phone owner to enable KinPilot in Accessibility settings."
+    "control_channel_unavailable" -> "Waiting for the control connection…"
+    "session_not_active" -> "Session ended. Request a new support session."
+    else -> "Checking remote control availability…"
+}
+
 const val CURRENT_PROTOCOL_VERSION = 1
 val ProtocolJson = Json { classDiscriminator = "type"; ignoreUnknownKeys = false; encodeDefaults = true }
 
@@ -78,4 +85,3 @@ object ProtocolValidation {
 
     private fun coordinateError(x: Float, y: Float): String? = if (!x.isFinite() || !y.isFinite() || x !in 0f..1f || y !in 0f..1f) "invalid_coordinate" else null
 }
-

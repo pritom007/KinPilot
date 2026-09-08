@@ -5,6 +5,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.media.projection.MediaProjectionManager
+import android.media.projection.MediaProjectionConfig
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -99,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 onClick = { openLatestRelease() },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Update from GitHub") }
+            Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(24.dp))
             Text(
                 "No account · No recording · Sessions expire automatically",
@@ -156,6 +159,7 @@ class MainActivity : ComponentActivity() {
                 } }
                 override fun onAccepted(expiresAt: Long) { runOnUiThread { accepted = true; status = "Approved. Choose what Android should share." } }
                 override fun onEnded(reason: String) { runOnUiThread {
+                    stopService(Intent(this@MainActivity, ScreenShareService::class.java))
                     code = null; request = null; connecting = false; sharing = false; status = "Session ended."
                 } }
                 override fun onError(value: String) { runOnUiThread {
@@ -166,8 +170,14 @@ class MainActivity : ComponentActivity() {
         }
         DisposableEffect(client) {
             ParentSessionState.client = client
+            family.remote.parent.capture.SessionEvents.listener = { reason -> runOnUiThread {
+                client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false
+                status = "Session ended: $reason"
+            } }
             RemoteControlService.addAvailabilityListener(controlAvailabilityListener)
             onDispose {
+                stopService(Intent(this@MainActivity, ScreenShareService::class.java))
+                family.remote.parent.capture.SessionEvents.listener = null
                 RemoteControlService.removeAvailabilityListener(controlAvailabilityListener)
                 client.close()
                 if (ParentSessionState.client === client) ParentSessionState.client = null
@@ -187,7 +197,12 @@ class MainActivity : ComponentActivity() {
             accepted = false
         }
         LaunchedEffect(accepted) {
-            if (accepted) projection.launch(getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
+            if (accepted) {
+                val manager = getSystemService(MediaProjectionManager::class.java)
+                projection.launch(if (Build.VERSION.SDK_INT >= 34)
+                    manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+                else manager.createScreenCaptureIntent())
+            }
         }
         val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -212,6 +227,8 @@ class MainActivity : ComponentActivity() {
                         else "Screen sharing works without this, but your helper cannot tap, swipe, or go Back until KinPilot is enabled in Android Accessibility settings."
                     )
                     if (!controlAvailable) {
+                        Text("Choose Downloaded apps (or Installed services) → KinPilot → Use KinPilot. If Android blocks this sideloaded app, open App info → ⋮ → Allow restricted settings, then return here. Only do this for the KinPilot APK you trust.")
+                        Text("Enabling this service lets your approved helper read screen content and perform taps, swipes, navigation, and typing during a support session. Nothing is recorded. You can stop sharing at any time.")
                         FilledTonalButton(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
                             Text("Open Accessibility settings")
                         }
@@ -267,6 +284,7 @@ class MainActivity : ComponentActivity() {
                 FilledTonalButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }, modifier = Modifier.weight(1f)) { Text("Notifications") }
             }
             if (code != null) OutlinedButton(onClick = {
+                stopService(Intent(this@MainActivity, ScreenShareService::class.java))
                 client.close(); code = null; request = null; connecting = false; status = "Session cancelled."
             }, modifier = Modifier.fillMaxWidth()) { Text("Cancel session") }
         }
@@ -350,7 +368,7 @@ class MainActivity : ComponentActivity() {
     companion object { @Volatile private var helperClient: RendezvousClient? = null }
 
     private fun openLatestRelease() {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases/latest")))
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases")))
     }
 }
 

@@ -13,11 +13,19 @@ object ScreenSessionCoordinator {
         val resultCode = intent.getIntExtra(ScreenShareService.EXTRA_RESULT_CODE, 0)
         val sessionId = requireNotNull(intent.getStringExtra("sessionId"))
         Log.i(TAG, "building engine sessionId=$sessionId resultCode=$resultCode")
-        engine = ParentRtcEngine(AppContext.value, sessionId, resultCode, projectionData).also { it.start() }
+        engine = ParentRtcEngine(AppContext.value, sessionId, resultCode, projectionData)
         active = true
+        engine?.start()
         Log.i(TAG, "engine started")
     }
-    fun stop(reason: String) { Log.i(TAG, "stop reason=$reason active=$active"); engine?.close(); engine = null; if (active) { active = false; SessionEvents.listener?.invoke(reason) } }
+    fun stop(reason: String) {
+        val previous = engine
+        engine = null
+        val wasActive = active
+        active = false
+        previous?.close()
+        if (wasActive) SessionEvents.listener?.invoke(reason)
+    }
     private const val TAG = "KinPilot/ScreenSession"
 }
 

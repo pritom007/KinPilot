@@ -14,3 +14,10 @@ export class ControlSender {
 }
 export const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
+export function videoPoint(x:number,y:number,width:number,height:number,frameWidth:number,frameHeight:number){
+  if(width<=0||height<=0||frameWidth<=0||frameHeight<=0)return undefined;
+  const scale=Math.min(width/frameWidth,height/frameHeight);
+  const w=frameWidth*scale,h=frameHeight*scale;
+  const nx=(x-(width-w)/2)/w,ny=(y-(height-h)/2)/h;
+  return Number.isFinite(nx)&&Number.isFinite(ny)&&nx>=0&&nx<=1&&ny>=0&&ny<=1?{x:nx,y:ny}:undefined;
+}

@@ -64,6 +64,6 @@ class MainActivity : ComponentActivity() {
     companion object { @Volatile private var clientHolder: RendezvousClient? = null }
 
     private fun openLatestRelease() {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases/latest")))
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases")))
     }
 }

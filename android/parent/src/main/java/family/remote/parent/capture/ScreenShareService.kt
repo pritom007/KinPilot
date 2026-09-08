@@ -5,17 +5,28 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import family.remote.parent.MainActivity
 import family.remote.parent.control.RemoteControlService
 
 class ScreenShareService : Service() {
+    private val handler = Handler(Looper.getMainLooper())
+    private val screenLockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) { stopSession() }
+    }
     override fun onCreate() {
         super.onCreate()
+        ContextCompat.registerReceiver(this, screenLockReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "onCreate")
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Active support sessions", NotificationManager.IMPORTANCE_HIGH))
@@ -43,7 +54,15 @@ class ScreenShareService : Service() {
             Log.w(TAG, "Accessibility service is unavailable; continuing with screen sharing only")
         }
         RemoteControlService.beginSession()
-        ScreenSessionCoordinator.onForegroundServiceReady(intent)
+        try { ScreenSessionCoordinator.onForegroundServiceReady(intent) }
+        catch (_: RuntimeException) {
+            RemoteControlService.endSession()
+            ScreenSessionCoordinator.stop("screen_capture_failed")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        handler.postDelayed({ stopSession() }, 60 * 60 * 1000L)
         return START_NOT_STICKY
     }
 
@@ -54,7 +73,13 @@ class ScreenShareService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
-    override fun onDestroy() { Log.i(TAG, "onDestroy"); RemoteControlService.endSession(); ScreenSessionCoordinator.stop("service_destroyed"); super.onDestroy() }
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        unregisterReceiver(screenLockReceiver)
+        RemoteControlService.endSession()
+        ScreenSessionCoordinator.stop("service_destroyed")
+        super.onDestroy()
+    }
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object { const val ACTION_STOP = "family.remote.STOP"; const val EXTRA_RESULT_CODE = "resultCode"; const val EXTRA_RESULT_DATA = "resultData"; private const val CHANNEL = "support_session"; private const val NOTIFICATION_ID = 42; private const val TAG = "KinPilot/ScreenShareSvc" }

@@ -4,6 +4,11 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.app.KeyguardManager
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import family.remote.protocol.ControlCommand
 import family.remote.protocol.ControlResult
@@ -13,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 class RemoteControlService : AccessibilityService() {
     private val lastSequence = AtomicLong(-1)
+    private var gesturePending = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -20,54 +26,101 @@ class RemoteControlService : AccessibilityService() {
         notifyAvailabilityChanged()
     }
     override fun onInterrupt() = Unit
-    override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onDestroy() {
         if (instance === this) {
             instance = null
             notifyAvailabilityChanged()
+            if (sessionActive) {
+                endSession()
+                stopService(android.content.Intent(this, family.remote.parent.capture.ScreenShareService::class.java))
+            }
         }
         super.onDestroy()
     }
 
-    fun execute(command: ControlCommand): ControlResult {
-        ProtocolValidation.validate(command)?.let { return ControlResult(command.sequence, false, it) }
-        if (!sessionActive) return ControlResult(command.sequence, false, "session_not_active")
-        if (command.sequence <= lastSequence.get() || !lastSequence.compareAndSet(lastSequence.get(), command.sequence)) {
-            return ControlResult(command.sequence, false, "replayed_command")
+    private fun execute(command: ControlCommand, reply: (ControlResult) -> Unit) {
+        fun reject(reason: String) = reply(ControlResult(command.sequence, false, reason))
+        ProtocolValidation.validate(command)?.let { reject(it); return }
+        if (!sessionActive) { reject("session_not_active"); return }
+        if (getSystemService(KeyguardManager::class.java).isKeyguardLocked) { reject("screen_locked"); return }
+        if (command.sequence <= lastSequence.get()) { reject("replayed_command"); return }
+        lastSequence.set(command.sequence)
+        if (gesturePending) { reject("gesture_in_progress"); return }
+        when (command) {
+            is ControlCommand.Tap -> { gesture(command, command.x, command.y, command.x, command.y, 80, reply); return }
+            is ControlCommand.LongPress -> { gesture(command, command.x, command.y, command.x, command.y, 650, reply); return }
+            is ControlCommand.Swipe -> { gesture(command, command.fromX, command.fromY, command.toX, command.toY, command.durationMs, reply); return }
+            else -> Unit
         }
         val accepted = when (command) {
-            is ControlCommand.Tap -> gesture(command.x, command.y, command.x, command.y, 1)
-            is ControlCommand.LongPress -> gesture(command.x, command.y, command.x, command.y, 650)
-            is ControlCommand.Swipe -> gesture(command.fromX, command.fromY, command.toX, command.toY, command.durationMs)
             is ControlCommand.GlobalAction -> performGlobalAction(when (command.action) {
                 ControlCommand.Action.BACK -> GLOBAL_ACTION_BACK
                 ControlCommand.Action.HOME -> GLOBAL_ACTION_HOME
                 ControlCommand.Action.RECENTS -> GLOBAL_ACTION_RECENTS
             })
             is ControlCommand.SetText -> setFocusedText(command.text)
+            else -> false
         }
-        return ControlResult(command.sequence, accepted, if (accepted) null else "action_not_supported")
+        reply(ControlResult(command.sequence, accepted, if (accepted) null else "action_not_supported"))
     }
 
-    private fun gesture(x1: Float, y1: Float, x2: Float, y2: Float, duration: Long): Boolean {
-        val metrics = resources.displayMetrics
+    private fun gesture(command: ControlCommand, x1: Float, y1: Float, x2: Float, y2: Float, duration: Long, reply: (ControlResult) -> Unit) {
+        val bounds = getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
         val path = Path().apply {
-            moveTo(x1 * metrics.widthPixels, y1 * metrics.heightPixels)
-            if (x1 != x2 || y1 != y2) lineTo(x2 * metrics.widthPixels, y2 * metrics.heightPixels)
+            moveTo(x1 * (bounds.width() - 1), y1 * (bounds.height() - 1))
+            if (x1 != x2 || y1 != y2) lineTo(x2 * (bounds.width() - 1), y2 * (bounds.height() - 1))
         }
-        return dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build(), null, null)
+        gesturePending = true
+        var finished = false
+        fun finish(ok: Boolean, reason: String?) {
+            if (finished) return
+            finished = true
+            gesturePending = false
+            reply(ControlResult(command.sequence, ok, reason))
+        }
+        val submitted = dispatchGesture(
+            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build(),
+            object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) { finish(true, null) }
+                override fun onCancelled(gestureDescription: GestureDescription?) { finish(false, "gesture_cancelled") }
+            }, mainHandler)
+        if (!submitted) finish(false, "gesture_rejected")
+        else mainHandler.postDelayed({ finish(false, "gesture_timeout") }, duration + 1500)
     }
 
     private fun setFocusedText(text: String): Boolean {
-        val node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
-        if (!node.isEditable || node.isPassword) return false
+        // AccessibilityService.findFocus() is unreliable for some Compose text
+        // fields. Resolve the input focus from the active window as a fallback,
+        // while still requiring the target to be genuinely focused and editable.
+        val node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?.takeIf(::isSafeTextTarget)
+            ?: findFocusedEditable(rootInActiveWindow)
+            ?: return false
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
+    private fun findFocusedEditable(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (root == null) return null
+        val pending = ArrayDeque<AccessibilityNodeInfo>().apply { add(root) }
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            if (isSafeTextTarget(node)) return node
+            for (index in 0 until node.childCount) node.getChild(index)?.let(pending::addLast)
+        }
+        return null
+    }
+
+    private fun isSafeTextTarget(node: AccessibilityNodeInfo): Boolean =
+        node.isFocused && node.isEditable && !node.isPassword &&
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+
     companion object {
         @Volatile private var instance: RemoteControlService? = null
         @Volatile private var sessionActive = false
+        private val sessionGeneration = AtomicLong()
+        private val mainHandler = Handler(Looper.getMainLooper())
         private val availabilityListeners = CopyOnWriteArraySet<(Boolean) -> Unit>()
 
         fun isAvailable(): Boolean = instance != null
@@ -76,10 +129,24 @@ class RemoteControlService : AccessibilityService() {
             listener(isAvailable())
         }
         fun removeAvailabilityListener(listener: (Boolean) -> Unit) { availabilityListeners -= listener }
-        fun beginSession() { sessionActive = true; instance?.lastSequence?.set(-1) }
-        fun endSession() { sessionActive = false }
-        fun dispatch(command: ControlCommand): ControlResult = instance?.execute(command)
-            ?: ControlResult(command.sequence, false, "accessibility_unavailable")
+        fun beginSession() { sessionGeneration.incrementAndGet(); sessionActive = true; instance?.lastSequence?.set(-1) }
+        fun endSession() { sessionActive = false; sessionGeneration.incrementAndGet() }
+        fun dispatch(command: ControlCommand, reply: (ControlResult) -> Unit) {
+            val generation = sessionGeneration.get()
+            mainHandler.post {
+                if (!sessionActive || generation != sessionGeneration.get()) {
+                    reply(ControlResult(command.sequence, false, "session_not_active"))
+                    return@post
+                }
+                val service = instance
+                if (service == null) reply(ControlResult(command.sequence, false, "accessibility_unavailable"))
+                else try { service.execute(command, reply) }
+                catch (_: RuntimeException) {
+                    service.gesturePending = false
+                    reply(ControlResult(command.sequence, false, "action_not_supported"))
+                }
+            }
+        }
 
         private fun notifyAvailabilityChanged() {
             val available = isAvailable()
@@ -87,4 +154,3 @@ class RemoteControlService : AccessibilityService() {
         }
     }
 }
-
