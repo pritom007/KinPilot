@@ -15,6 +15,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +31,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -40,6 +47,9 @@ import com.google.zxing.MultiFormatWriter
 import family.remote.parent.capture.ScreenShareService
 import family.remote.parent.control.RemoteControlService
 import family.remote.protocol.RendezvousClient
+import family.remote.protocol.SupportCode
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 object ParentSessionState { @Volatile var client: RendezvousClient? = null }
 
@@ -49,13 +59,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         family.remote.parent.capture.AppContext.value = applicationContext
+        UpdateWorker.schedule(applicationContext)
         setContent { KinPilotTheme { KinPilotApp() } }
     }
 
     @Composable
     private fun KinPilotApp() {
         var page by rememberSaveable { mutableStateOf(AppPage.HOME) }
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(Modifier.fillMaxSize().safeDrawingPadding(), color = MaterialTheme.colorScheme.background) {
             when (page) {
                 AppPage.HOME -> HomeScreen(onGetSupport = { page = AppPage.GET_SUPPORT }, onHelp = { page = AppPage.HELP_SOMEONE })
                 AppPage.GET_SUPPORT -> GetSupportScreen(onBack = { page = AppPage.HOME })
@@ -70,20 +81,20 @@ class MainActivity : ComponentActivity() {
             Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(12.dp))
             BrandMark()
             Spacer(Modifier.height(16.dp))
             Text("KinPilot", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
             Text(
-                "Private, one-time remote support for people you trust.",
+                "A little closer. A lot more helpful.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 8.dp, bottom = 32.dp)
+                modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
             )
             RoleCard(
                 title = "Get support",
-                description = "Create a one-time code, approve your helper, then choose what to share.",
+                description = "Let someone you trust lend a hand. You stay in control.",
                 action = "Create support code",
                 accent = MaterialTheme.colorScheme.primary,
                 onClick = onGetSupport
@@ -91,17 +102,13 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(16.dp))
             RoleCard(
                 title = "Help someone",
-                description = "Enter their code and wait for them to approve the secure session.",
+                description = "Scan their QR or paste a code. Connect in moments.",
                 action = "Enter a code",
                 accent = MaterialTheme.colorScheme.secondary,
                 onClick = onHelp
             )
             Spacer(Modifier.height(16.dp))
-            OutlinedButton(
-                onClick = { openLatestRelease() },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Update from GitHub") }
-            Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
+            UpdateCard()
             Spacer(Modifier.height(24.dp))
             Text(
                 "No account · No recording · Sessions expire automatically",
@@ -120,7 +127,7 @@ class MainActivity : ComponentActivity() {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-            Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.background(Brush.linearGradient(listOf(accent.copy(alpha = .14f), MaterialTheme.colorScheme.surface))).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.size(38.dp).clip(CircleShape).background(accent.copy(alpha = .14f)), contentAlignment = Alignment.Center) {
                     Text(title.first().toString(), color = accent, fontWeight = FontWeight.Bold)
                 }
@@ -205,6 +212,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+        LaunchedEffect(client) {
+            connecting = true
+            status = "Preparing your private connection…"
+            client.connect()
+        }
+        val clipboard = LocalClipboardManager.current
 
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             ScreenHeader("Get support", "You approve every helper and Android always asks before sharing.", leaveScreen)
@@ -252,6 +265,14 @@ class MainActivity : ComponentActivity() {
                         Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
                         Image(image.asImageBitmap(), "QR support code", Modifier.size(210.dp))
                         Text("Share this QR or code with one trusted helper.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(value)) }) { Text("Copy code") }
+                            TextButton(onClick = {
+                                startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, "Help me on KinPilot: https://kinpilot.netlify.app/join#$value")
+                                }, "Share support link"))
+                            }) { Text("Share link") }
                     }
                 }
             }
@@ -293,14 +314,15 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun HelpSomeoneScreen(onBack: () -> Unit) {
         BackHandler(onBack = onBack)
-        var name by remember { mutableStateOf("") }
-        var code by remember { mutableStateOf("") }
+        val preferences = remember { getSharedPreferences("kinpilot", MODE_PRIVATE) }
+        var name by rememberSaveable { mutableStateOf(preferences.getString("helperName", "").orEmpty()) }
+        var code by rememberSaveable { mutableStateOf("") }
         var status by remember { mutableStateOf("Enter the code shown on the other person's phone.") }
         var connecting by remember { mutableStateOf(false) }
         var acceptedAt by remember { mutableStateOf<Long?>(null) }
         val client = remember {
             RendezvousClient(object : RendezvousClient.Listener {
-                override fun onOpen() { runOnUiThread { helperClient?.join(code, name.ifBlank { "Trusted helper" }) } }
+                override fun onOpen() { runOnUiThread { SupportCode.parse(code)?.let { helperClient?.join(it, name.ifBlank { "Trusted helper" }) } } }
                 override fun onWaiting() { runOnUiThread { connecting = true; status = "Waiting for them to approve…" } }
                 override fun onAccepted(expiresAt: Long) { runOnUiThread { connecting = false; acceptedAt = expiresAt } }
                 override fun onDeclined() { runOnUiThread { connecting = false; status = "They declined this request." } }
@@ -312,17 +334,39 @@ class MainActivity : ComponentActivity() {
             }).also { helperClient = it }
         }
         DisposableEffect(client) { onDispose { client.close(); if (helperClient === client) helperClient = null } }
+        val clipboard = LocalClipboardManager.current
+        val keyboard = LocalSoftwareKeyboardController.current
+        val requestAccess: () -> Unit = {
+            if (!connecting && SupportCode.parse(code) != null) {
+                keyboard?.hide()
+                preferences.edit().putString("helperName", name.trim()).apply()
+                client.close()
+                connecting = true; status = "Connecting securely…"; client.connect()
+            }
+        }
+        val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+            result.contents?.let { contents ->
+                val parsed = SupportCode.parse(contents)
+                if (parsed == null) status = "This is not a KinPilot support QR. Ask them to open Get support."
+                else { code = parsed; status = "QR scanned. Tap Request access to connect." }
+            }
+        }
 
         acceptedAt?.let { expiry ->
             RemoteSupportScreen(client, expiry) { client.close(); acceptedAt = null; connecting = false; status = "Session ended." }
             return
         }
 
-        Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.fillMaxSize().imePadding().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             ScreenHeader("Help someone", "They stay in control and must approve before you can see anything.", onBack)
+            FilledTonalButton(enabled = !connecting, onClick = {
+                scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    .setPrompt("Scan the QR on their KinPilot screen").setBeepEnabled(false).setOrientationLocked(false))
+            }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Scan QR code", style = MaterialTheme.typography.titleMedium) }
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it.take(60) },
+                enabled = !connecting,
                 label = { Text("Your name") },
                 placeholder = { Text("Trusted helper") },
                 modifier = Modifier.fillMaxWidth(),
@@ -330,18 +374,29 @@ class MainActivity : ComponentActivity() {
             )
             OutlinedTextField(
                 value = code,
-                onValueChange = { code = formatCode(it) },
+                onValueChange = { code = it.take(128) },
+                enabled = !connecting,
                 label = { Text("12-character support code") },
                 placeholder = { Text("ABCD-EFGH-JKLM") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters)
+                supportingText = { Text("Paste a code or shared link • ${SupportCode.parse(code)?.length ?: code.filter(Char::isLetterOrDigit).length.coerceAtMost(12)}/12") },
+                trailingIcon = { TextButton(enabled = !connecting, onClick = {
+                    val parsed = SupportCode.parse(clipboard.getText()?.text.orEmpty())
+                    if (parsed != null) code = parsed else status = "Copy a full KinPilot code or link first."
+                }) { Text("Paste") } },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrect = false, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { requestAccess() })
             )
             Button(
-                enabled = code.count(Char::isLetterOrDigit) == 12 && !connecting,
-                onClick = { connecting = true; status = "Connecting securely…"; client.connect() },
+                enabled = SupportCode.parse(code) != null && !connecting,
+                onClick = requestAccess,
                 modifier = Modifier.fillMaxWidth().height(52.dp)
             ) { Text(if (connecting) "Waiting for approval…" else "Request access") }
+            if (connecting) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                TextButton(onClick = { client.close(); connecting = false; status = "Request cancelled. You can try another code." }) { Text("Cancel request") }
+            }
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                 Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -386,24 +441,21 @@ private fun BrandMark() {
 @Composable
 private fun KinPilotTheme(content: @Composable () -> Unit) {
     val scheme = lightColorScheme(
-        primary = Color(0xFF176B5B),
+        primary = Color(0xFF5954D6),
         onPrimary = Color.White,
-        primaryContainer = Color(0xFFD4F0E7),
-        onPrimaryContainer = Color(0xFF073D34),
-        secondary = Color(0xFF49647B),
+        primaryContainer = Color(0xFFE5E1FF),
+        onPrimaryContainer = Color(0xFF201A57),
+        secondary = Color(0xFF087F8C),
         secondaryContainer = Color(0xFFD9E9F7),
         tertiary = Color(0xFFF5B429),
         tertiaryContainer = Color(0xFFFFE9B0),
-        background = Color(0xFFF4F8F6),
+        background = Color(0xFFF7F6FC),
         surface = Color.White,
-        surfaceVariant = Color(0xFFE4ECE8)
+        surfaceVariant = Color(0xFFEAE8F3)
     )
-    MaterialTheme(colorScheme = scheme, content = content)
-}
-
-private fun formatCode(input: String): String {
-    val compact = input.uppercase().filter(Char::isLetterOrDigit).take(12)
-    return compact.chunked(4).joinToString("-")
+    val dark = darkColorScheme(primary = Color(0xFFC6BFFF), secondary = Color(0xFF7BD8DE),
+        background = Color(0xFF11121D), surface = Color(0xFF1B1C2C), surfaceVariant = Color(0xFF292B40))
+    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) dark else scheme, content = content)
 }
 
 private fun qr(text: String): Bitmap {

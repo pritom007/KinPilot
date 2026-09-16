@@ -11,15 +11,31 @@ android {
         applicationId = "app.kinpilot.parent"
         minSdk = 31
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
+    signingConfigs {
+        create("distribution") {
+            System.getenv("KINPILOT_KEYSTORE")?.let { storeFile = file(it) }
+            storePassword = System.getenv("KINPILOT_STORE_PASSWORD")
+            keyAlias = System.getenv("KINPILOT_KEY_ALIAS")
+            keyPassword = System.getenv("KINPILOT_KEY_PASSWORD")
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("distribution")
+        }
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
     kotlinOptions { jvmTarget = "21" }
 }
 dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")

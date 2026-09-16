@@ -12,6 +12,7 @@ local.properties
 **/google-services.json
 *.jks
 *.keystore
+.signing/
 .env
 .env.*
 !.env.example

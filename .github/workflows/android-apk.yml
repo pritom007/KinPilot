@@ -78,6 +78,29 @@ jobs:
           cp android/parent/build/outputs/apk/debug/parent-debug.apk artifacts/KinPilot.apk
           (cd artifacts && sha256sum KinPilot.apk > KinPilot.apk.sha256)
 
+      - name: Build signed distribution update
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        env:
+          KINPILOT_KEYSTORE_BASE64: ${{ secrets.KINPILOT_KEYSTORE_BASE64 }}
+          KINPILOT_STORE_PASSWORD: ${{ secrets.KINPILOT_STORE_PASSWORD }}
+          KINPILOT_KEY_ALIAS: ${{ secrets.KINPILOT_KEY_ALIAS }}
+          KINPILOT_KEY_PASSWORD: ${{ secrets.KINPILOT_KEY_PASSWORD }}
+        run: |
+          test -n "$KINPILOT_KEYSTORE_BASE64" || { echo 'Configure the persistent signing secrets described in docs/UPDATES.md before publishing.'; exit 1; }
+          export KINPILOT_KEYSTORE="$RUNNER_TEMP/kinpilot-release.jks"
+          trap 'rm -f "$KINPILOT_KEYSTORE"' EXIT
+          printf '%s' "$KINPILOT_KEYSTORE_BASE64" | base64 --decode > "$KINPILOT_KEYSTORE"
+          (cd android && gradle :parent:assembleRelease --no-daemon --stacktrace)
+          cp android/parent/build/outputs/apk/release/parent-release.apk artifacts/KinPilot.apk
+          (cd artifacts && sha256sum KinPilot.apk > KinPilot.apk.sha256)
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          metadata = json.loads(Path('android/parent/build/outputs/apk/release/output-metadata.json').read_text())
+          apk = metadata['elements'][0]
+          Path('artifacts/update.json').write_text(json.dumps({'versionCode': apk['versionCode'], 'versionName': apk['versionName']}))
+          PY
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -85,6 +108,7 @@ jobs:
           path: |
             artifacts/KinPilot.apk
             artifacts/KinPilot.apk.sha256
+            artifacts/update.json
           if-no-files-found: error
           retention-days: 30
 
@@ -105,4 +129,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
-        run: gh release upload "$RELEASE_TAG" artifacts/KinPilot.apk artifacts/KinPilot.apk.sha256 --clobber
+        run: gh release upload "$RELEASE_TAG" artifacts/KinPilot.apk artifacts/KinPilot.apk.sha256 artifacts/update.json --clobber
