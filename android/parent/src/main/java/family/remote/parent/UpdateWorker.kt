@@ -9,11 +9,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.*
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class UpdateWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         return try {
-            val release = AppUpdates.latest() ?: return Result.success()
+            val release = withContext(Dispatchers.IO) { AppUpdates.latest() } ?: return Result.success()
             val notifications = NotificationManagerCompat.from(applicationContext)
             if (!notifications.areNotificationsEnabled()) return Result.success()
             val preferences = applicationContext.getSharedPreferences("kinpilot", Context.MODE_PRIVATE)
@@ -29,7 +32,8 @@ class UpdateWorker(context: Context, parameters: WorkerParameters) : CoroutineWo
                 .setContentIntent(open).setAutoCancel(true).build())
             preferences.edit().putString("notifiedVersion", release.version).apply()
             Result.success()
-        } catch (_: Exception) { Result.retry() }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { Result.retry() }
     }
 
     companion object {

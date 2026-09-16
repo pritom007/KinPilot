@@ -252,7 +252,7 @@ class MainActivity : ComponentActivity() {
             if (code == null) {
                 Button(
                     enabled = !connecting,
-                    onClick = { connecting = true; status = "Starting the private connection…"; client.connect() },
+                    onClick = { client.close(); connecting = true; status = "Starting the private connection…"; client.connect() },
                     modifier = Modifier.fillMaxWidth().height(52.dp)
                 ) { Text(if (connecting) "Creating code…" else "Create support code") }
             }
@@ -302,11 +302,14 @@ class MainActivity : ComponentActivity() {
                     onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     modifier = Modifier.weight(1f)
                 ) { Text(if (controlAvailable) "Control settings" else "Enable control") }
-                FilledTonalButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }, modifier = Modifier.weight(1f)) { Text("Notifications") }
+                FilledTonalButton(onClick = {
+                    if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                }, modifier = Modifier.weight(1f)) { Text("Notifications") }
             }
             if (code != null) OutlinedButton(onClick = {
                 stopService(Intent(this@MainActivity, ScreenShareService::class.java))
-                client.close(); code = null; request = null; connecting = false; status = "Session cancelled."
+                client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false; status = "Session cancelled."
             }, modifier = Modifier.fillMaxWidth()) { Text("Cancel session") }
         }
     }
@@ -422,9 +425,6 @@ class MainActivity : ComponentActivity() {
 
     companion object { @Volatile private var helperClient: RendezvousClient? = null }
 
-    private fun openLatestRelease() {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/pritom007/KinPilot/releases")))
-    }
 }
 
 @Composable
