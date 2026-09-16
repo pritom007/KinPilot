@@ -70,14 +70,17 @@ class RendezvousClient(
 
     private fun poll() {
         val id = clientId ?: return
+        val expectedGeneration = generation.get()
         if (!polling) return
         http.newCall(Request.Builder().url("$url/api/poll?clientId=$id").build()).enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
+                if (generation.get() != expectedGeneration) return
                 Log.w(TAG, "poll failed: ${error.message}")
                 again()
             }
             override fun onResponse(call: Call, response: Response) {
                 response.use {
+                    if (generation.get() != expectedGeneration) return
                     if (it.isSuccessful) runCatching {
                         JSONObject(it.body?.string().orEmpty()).getJSONArray("messages")
                     }.getOrNull()?.let { messages ->
@@ -107,15 +110,18 @@ class RendezvousClient(
         success: (JSONObject) -> Unit,
         failure: () -> Unit = {}
     ) {
+        val expectedGeneration = generation.get()
         http.newCall(Request.Builder().url(url + path).post(body.toString().toRequestBody(json)).build())
             .enqueue(object : Callback {
                 override fun onFailure(call: Call, error: IOException) {
+                    if (generation.get() != expectedGeneration) return
                     Log.w(TAG, "$path failed: ${error.message}")
                     failure()
                     listener.onError("service_unavailable")
                 }
                 override fun onResponse(call: Call, response: Response) {
                     response.use {
+                        if (generation.get() != expectedGeneration) return
                         if (!it.isSuccessful) {
                             Log.w(TAG, "$path -> ${it.code}")
                             failure()
