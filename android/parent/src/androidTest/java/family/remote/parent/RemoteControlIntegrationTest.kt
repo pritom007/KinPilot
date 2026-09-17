@@ -40,6 +40,8 @@ class RemoteControlIntegrationTest {
             assertTrue("Accessibility must bind before actions are tested", RemoteControlService.isAvailable())
             context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
             assertTrue("KinPilot should become foreground", device.wait(Until.hasObject(By.pkg(context.packageName)), 10000))
+            device.waitForIdle()
+            device.takeScreenshot(java.io.File(context.getExternalFilesDir(null), "home.png"))
             // The role cards extend below the fold on the CI emulator. Scroll only
             // during setup; the actual action assertions below use our service.
             if (!device.hasObject(By.text("Enter a code"))) {
@@ -53,6 +55,8 @@ class RemoteControlIntegrationTest {
             val tap = ControlCommand.Tap(1, bounds.centerX().toFloat() / (wm.width() - 1), bounds.centerY().toFloat() / (wm.height() - 1))
             assertTrue("Remote tap must complete", execute(tap).accepted)
             assertTrue("Tap must actually open the helper screen", device.wait(Until.hasObject(By.text("Your name")), 5000))
+            device.waitForIdle()
+            device.takeScreenshot(java.io.File(context.getExternalFilesDir(null), "help.png"))
             assertEquals("replayed_command", execute(tap).reason)
             val field = device.findObject(By.text("Your name"))
             val f = field.visibleBounds
