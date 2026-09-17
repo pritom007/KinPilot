@@ -84,7 +84,7 @@ internal fun UpdateCard() {
             Text(status, style = MaterialTheme.typography.bodyMedium)
             val available = release
             if (available != null) {
-                Text("Download the update, then open it and approve installation.", style = MaterialTheme.typography.bodySmall)
+                Text("Download the update, then open it and approve installation. If Android says App not installed, remove a pre-v0.0.7 debug build once and reinstall the latest release.", style = MaterialTheme.typography.bodySmall)
                 Button(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(available.download))) }) {
                     Text("Download update")
                 }

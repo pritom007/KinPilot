@@ -11,8 +11,8 @@ android {
         applicationId = "app.kinpilot.parent"
         minSdk = 31
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = System.getenv("KINPILOT_VERSION_CODE")?.toIntOrNull() ?: 5
+        versionName = System.getenv("KINPILOT_VERSION_NAME") ?: "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }

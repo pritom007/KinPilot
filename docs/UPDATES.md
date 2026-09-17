@@ -6,9 +6,11 @@ The home screen checks published GitHub releases (including prereleases) when op
 
 Configure GitHub Actions repository secrets: `KINPILOT_KEYSTORE_BASE64` (base64-encoded persistent Java keystore), `KINPILOT_STORE_PASSWORD`, `KINPILOT_KEY_ALIAS`, and `KINPILOT_KEY_PASSWORD`. Keep an encrypted backup of the keystore and passwords outside GitHub. Never commit the key. Release jobs deliberately fail if this signing setup is missing, rather than distribute APKs with changing debug identities.
 
-Previous releases used disposable CI debug keys. Moving to the persistent key may require a one-time uninstall/reinstall and re-enabling Accessibility. Subsequent releases must reuse that key and increase `versionCode` in `android/parent/build.gradle.kts`. Never replace a published version with different app contents.
+Previous releases used disposable CI debug keys. Moving to the persistent key may require a one-time uninstall/reinstall and re-enabling Accessibility. Android reports this signature conflict only as **App not installed**. Remove the old KinPilot installation, install the newest GitHub Release APK once, and enable Accessibility again. Subsequent signed releases update normally without uninstalling. Never replace a published version with different app contents.
 
-PR builds remain debug-signed test artifacts. After merging, publish a new release from main; CI tests, builds the signed APK, and attaches `KinPilot.apk`, `KinPilot.apk.sha256`, and `update.json`. Existing 0.3.0 apps need the first update installed manually; they cannot acquire this new updater remotely before installing it.
+PR builds remain debug-signed test artifacts and must not be installed over release builds. Every successful merge to `main` now tests the project, calculates the next version, builds with that version embedded in `BuildConfig`, signs and verifies the APK, and publishes a GitHub Release with `KinPilot.apk`, `KinPilot.apk.sha256`, and matching `update.json`. Version rollover is `v0.0.9 → v0.0.10 → v0.1.0`; Android version codes remain monotonically increasing. Workflow reruns reuse a release tag already pointing at the same commit.
+
+The app displays its embedded release version and discovers newer releases through `update.json`. A release is not published unless the APK metadata matches the calculated tag version. Existing pre-updater apps need the first signed update installed manually.
 
 ## Connection UX verification
 
