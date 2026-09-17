@@ -273,6 +273,7 @@ class MainActivity : ComponentActivity() {
                                     putExtra(Intent.EXTRA_TEXT, "Help me on KinPilot: https://kinpilot.netlify.app/join#$value")
                                 }, "Share support link"))
                             }) { Text("Share link") }
+                        }
                     }
                 }
             }
