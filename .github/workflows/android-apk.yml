@@ -61,11 +61,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           working-directory: android
-          script: |
-            gradle :parent:connectedDebugAndroidTest --no-daemon --stacktrace
-            mkdir -p parent/build/reports/ui
-            adb pull /sdcard/Android/data/app.kinpilot.parent/files/home.png parent/build/reports/ui/home.png
-            adb pull /sdcard/Android/data/app.kinpilot.parent/files/help.png parent/build/reports/ui/help.png
+          script: gradle :parent:connectedDebugAndroidTest --no-daemon --stacktrace
 
       - name: Upload Android test reports
         if: always()
@@ -75,7 +71,6 @@ jobs:
           path: |
             android/parent/build/reports/androidTests/
             android/protocol/build/reports/tests/
-            android/parent/build/reports/ui/
 
       - name: Prepare installable APK
         run: |
