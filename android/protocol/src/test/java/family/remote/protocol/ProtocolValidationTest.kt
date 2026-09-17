@@ -5,6 +5,7 @@ import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolValidationTest {
@@ -20,5 +21,15 @@ class ProtocolValidationTest {
         assertEquals("controlStatus", decoded.type)
         assertFalse(decoded.ready)
         assertEquals("accessibility_unavailable", decoded.reason)
+    }
+
+    @Test fun roundTripsOptInVoiceStateWithoutPayloadData() {
+        val encoded = ProtocolJson.encodeToString(VoiceState(joined = true, muted = false))
+        val decoded = ProtocolJson.decodeFromString<VoiceState>(encoded)
+        assertEquals(VoiceState(joined = true, muted = false), decoded)
+    }
+
+    @Test fun advertisesVoiceCapability() {
+        assertTrue(ClientCapabilities().audio)
     }
 }

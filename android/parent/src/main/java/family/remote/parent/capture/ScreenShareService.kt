@@ -35,21 +35,10 @@ class ScreenShareService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand action=${intent?.action}")
         if (intent?.action == ACTION_STOP) { stopSession(); return START_NOT_STICKY }
-        val stopIntent = PendingIntent.getService(this, 2, Intent(this, ScreenShareService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val openIntent = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notification = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("Your screen is being shared")
-            .setContentText("Tap Stop to immediately end family support")
-            .setOngoing(true).setContentIntent(openIntent)
-            .addAction(android.R.drawable.ic_delete, "Stop", stopIntent).build()
-        // Android 14+ requires the explicit foreground service type on startForeground.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
-        Log.i(TAG, "startForeground done")
+        if (intent?.action == ACTION_VOICE_LEAVE) { ScreenSessionCoordinator.leaveVoice(); showNotification(false); return START_NOT_STICKY }
+        if (intent?.action == ACTION_VOICE_MUTE) { ScreenSessionCoordinator.setVoiceMuted(intent.getBooleanExtra(EXTRA_MUTED, true)); showNotification(true); return START_NOT_STICKY }
+        if (intent?.action == ACTION_VOICE_JOIN) { if (ScreenSessionCoordinator.joinVoice()) showNotification(true); return START_NOT_STICKY }
+        showNotification(false)
         if (!RemoteControlService.isAvailable()) {
             Log.w(TAG, "Accessibility service is unavailable; continuing with screen sharing only")
         }
@@ -64,6 +53,26 @@ class ScreenShareService : Service() {
         }
         handler.postDelayed({ stopSession() }, 60 * 60 * 1000L)
         return START_NOT_STICKY
+    }
+
+    private fun showNotification(voiceActive: Boolean) {
+        val stopIntent = PendingIntent.getService(this, 2, Intent(this, ScreenShareService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val openIntent = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = NotificationCompat.Builder(this, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentTitle("Your screen is being shared")
+            .setContentText(if (voiceActive) "Screen and voice are active" else "Tap Stop to immediately end family support")
+            .setOngoing(true).setContentIntent(openIntent)
+            .addAction(android.R.drawable.ic_delete, "Stop", stopIntent).build()
+        // Android 14+ requires the explicit foreground service type on startForeground.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
+                (if (voiceActive) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+            startForeground(NOTIFICATION_ID, notification, types)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        Log.i(TAG, "startForeground done")
     }
 
     private fun stopSession() {
@@ -82,5 +91,13 @@ class ScreenShareService : Service() {
     }
     override fun onBind(intent: Intent?): IBinder? = null
 
-    companion object { const val ACTION_STOP = "family.remote.STOP"; const val EXTRA_RESULT_CODE = "resultCode"; const val EXTRA_RESULT_DATA = "resultData"; private const val CHANNEL = "support_session"; private const val NOTIFICATION_ID = 42; private const val TAG = "KinPilot/ScreenShareSvc" }
+    companion object {
+        const val ACTION_STOP = "family.remote.STOP"
+        const val ACTION_VOICE_JOIN = "family.remote.VOICE_JOIN"
+        const val ACTION_VOICE_MUTE = "family.remote.VOICE_MUTE"
+        const val ACTION_VOICE_LEAVE = "family.remote.VOICE_LEAVE"
+        const val EXTRA_MUTED = "muted"
+        const val EXTRA_RESULT_CODE = "resultCode"; const val EXTRA_RESULT_DATA = "resultData"
+        private const val CHANNEL = "support_session"; private const val NOTIFICATION_ID = 42; private const val TAG = "KinPilot/ScreenShareSvc"
+    }
 }

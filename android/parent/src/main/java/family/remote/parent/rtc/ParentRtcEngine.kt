@@ -14,6 +14,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import org.json.JSONObject
 import org.webrtc.*
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -31,9 +32,19 @@ class ParentRtcEngine(
         }
     }
     private val factory: PeerConnectionFactory
+    private val audioDeviceModule = JavaAudioDeviceModule.builder(context)
+        .setUseHardwareAcousticEchoCanceler(true)
+        .setUseHardwareNoiseSuppressor(true)
+        .createAudioDeviceModule()
     private val peer: PeerConnection
     private val source: VideoSource
     private var channel: DataChannel? = null
+    private var voiceSender: RtpSender? = null
+    private var voiceSource: AudioSource? = null
+    private var voiceTrack: AudioTrack? = null
+    @Volatile private var voiceJoined = false
+    @Volatile private var voiceMuted = true
+    var onRemoteVoiceState: ((VoiceState) -> Unit)? = null
     private val closed = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var texture: SurfaceTextureHelper? = null
@@ -56,6 +67,7 @@ class ParentRtcEngine(
         Log.i(TAG, "init sessionId=$sessionId resultCode=$resultCode")
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
         factory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
             .createPeerConnectionFactory()
@@ -100,6 +112,10 @@ class ParentRtcEngine(
         displayManager.registerDisplayListener(displayListener, mainHandler)
         Log.i(TAG, "capturer.startCapture done")
         peer.addTrack(factory.createVideoTrack("screen", source), listOf("support"))
+        voiceSender = peer.addTransceiver(
+            MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
+        )?.sender
         channel = peer.createDataChannel("control", DataChannel.Init().apply { ordered = true })
         channel?.let(::observe)
         peer.createOffer(Sdp { offer ->
@@ -120,7 +136,7 @@ class ParentRtcEngine(
         override fun onBufferedAmountChange(previousAmount: Long) = Unit
         override fun onStateChange() {
             Log.i(TAG, "datachannel state=${dc.state()}")
-            mainHandler.post { if (!closed.get() && dc.state() == DataChannel.State.OPEN) sendControlStatus(RemoteControlService.isAvailable()) }
+            mainHandler.post { if (!closed.get() && dc.state() == DataChannel.State.OPEN) { sendControlStatus(RemoteControlService.isAvailable()); sendVoiceState() } }
         }
         override fun onMessage(buffer: DataChannel.Buffer) {
             if (buffer.binary) return
@@ -133,6 +149,10 @@ class ParentRtcEngine(
                 val json = bytes.decodeToString()
                 if (runCatching { JSONObject(json).optString("type") }.getOrNull() == "controlStatusRequest") {
                     sendControlStatus(RemoteControlService.isAvailable())
+                    return@post
+                }
+                if (runCatching { JSONObject(json).optString("type") }.getOrNull() == "voiceState") {
+                    runCatching { ProtocolJson.decodeFromString<VoiceState>(json) }.getOrNull()?.let { onRemoteVoiceState?.invoke(it) }
                     return@post
                 }
                 val command = runCatching { ProtocolJson.decodeFromString<ControlCommand>(json) }.getOrNull() ?: return@post
@@ -152,6 +172,38 @@ class ParentRtcEngine(
         activeChannel.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(status).encodeToByteArray()), false))
     }
 
+    fun joinVoice(): Boolean {
+        if (closed.get() || voiceJoined) return voiceJoined
+        val sender = voiceSender ?: return false
+        val newSource = factory.createAudioSource(MediaConstraints())
+        val newTrack = factory.createAudioTrack("voice-parent", newSource).apply { setEnabled(true) }
+        if (!sender.setTrack(newTrack, false)) {
+            newTrack.dispose(); newSource.dispose(); sendVoiceState("attach_failed")
+            return false
+        }
+        voiceSource = newSource; voiceTrack = newTrack; voiceJoined = true; voiceMuted = false
+        sendVoiceState(); return true
+    }
+
+    fun setVoiceMuted(muted: Boolean) {
+        if (!voiceJoined) return
+        voiceMuted = muted; voiceTrack?.setEnabled(!muted); sendVoiceState()
+    }
+
+    fun leaveVoice(reason: String? = null) {
+        voiceSender?.setTrack(null, false)
+        voiceTrack?.dispose(); voiceSource?.dispose(); voiceTrack = null; voiceSource = null
+        voiceJoined = false; voiceMuted = true; sendVoiceState(reason)
+    }
+
+    fun localVoiceState() = VoiceState(joined = voiceJoined, muted = voiceMuted)
+
+    private fun sendVoiceState(reason: String? = null) {
+        val state = VoiceState(joined = voiceJoined, muted = voiceMuted, reason = reason)
+        channel?.takeIf { it.state() == DataChannel.State.OPEN }?.send(DataChannel.Buffer(
+            ByteBuffer.wrap(ProtocolJson.encodeToString(state).encodeToByteArray()), false))
+    }
+
     private fun captureSize(): Pair<Int, Int> {
         val bounds = context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
         val scale = minOf(1f, 1280f / maxOf(bounds.width(), bounds.height()))
@@ -167,6 +219,9 @@ class ParentRtcEngine(
         override fun onIceConnectionChange(v: PeerConnection.IceConnectionState?) { Log.i(TAG, "iceConn=$v") }
         override fun onIceGatheringChange(v: PeerConnection.IceGatheringState?) { Log.i(TAG, "iceGather=$v") }
         override fun onDataChannel(dc: DataChannel) { Log.i(TAG, "onDataChannel"); channel = dc; observe(dc) }
+        override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
+            (receiver.track() as? AudioTrack)?.setEnabled(true)
+        }
     }
 
     private fun decodeIce(v: String) = runCatching {
@@ -180,6 +235,8 @@ class ParentRtcEngine(
         displayManager.unregisterDisplayListener(displayListener)
         mainHandler.removeCallbacksAndMessages(null)
         RemoteControlService.removeAvailabilityListener(availabilityListener)
+        leaveVoice("session_ended")
+        onRemoteVoiceState = null
         client.signalListener = null
         // Order matters: stop the screen capturer and dispose the source BEFORE
         // closing the peer, otherwise the native VideoSource can be torn down
@@ -191,6 +248,7 @@ class ParentRtcEngine(
         channel?.dispose()
         peer.close()
         factory.dispose()
+        audioDeviceModule.release()
         egl.release()
     }
     companion object { private const val TAG = "KinPilot/ParentRTC" }

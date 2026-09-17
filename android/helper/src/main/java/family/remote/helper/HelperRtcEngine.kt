@@ -10,10 +10,12 @@ import family.remote.protocol.ControlStatus
 import family.remote.protocol.ProtocolJson
 import family.remote.protocol.RendezvousClient
 import family.remote.protocol.RemoteTouchInput
+import family.remote.protocol.VoiceState
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import org.json.JSONObject
 import org.webrtc.*
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -24,6 +26,10 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     private val mainHandler = Handler(Looper.getMainLooper())
     private val egl = EglBase.create()
     private val factory: PeerConnectionFactory
+    private val audioDeviceModule = JavaAudioDeviceModule.builder(context)
+        .setUseHardwareAcousticEchoCanceler(true)
+        .setUseHardwareNoiseSuppressor(true)
+        .createAudioDeviceModule()
     private val peer: PeerConnection
     private var channel: DataChannel? = null
     @Volatile private var renderer: SurfaceViewRenderer? = null
@@ -33,6 +39,10 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     @Volatile private var controlReady = false
     @Volatile private var frameSize = 0 to 0
     @Volatile private var lastStatus: Pair<Boolean, String?>? = null
+    private var voiceSource: AudioSource? = null
+    private var voiceTrack: AudioTrack? = null
+    @Volatile private var voiceJoined = false
+    @Volatile private var voiceMuted = true
     private val pendingResults = mutableMapOf<Long, Runnable>()
     private val statusProbe = object : Runnable {
         override fun run() {
@@ -45,11 +55,13 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
     private val pendingIce = mutableListOf<IceCandidate>()
     var onControlStatus: ((Boolean, String?) -> Unit)? = null
     var onControlResult: ((ControlResult) -> Unit)? = null
+    var onRemoteVoiceState: ((VoiceState) -> Unit)? = null
 
     init {
         Log.i(TAG, "init")
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
         factory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDeviceModule)
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
             .createPeerConnectionFactory()
@@ -145,7 +157,7 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
             override fun onBufferedAmountChange(previousAmount: Long) = Unit
             override fun onStateChange() {
                 Log.i(TAG, "control channel state=${dataChannel.state()}")
-                if (dataChannel.state() != DataChannel.State.OPEN) updateControlStatus(false, "control_channel_unavailable")
+                if (dataChannel.state() != DataChannel.State.OPEN) updateControlStatus(false, "control_channel_unavailable") else sendVoiceState()
             }
             override fun onMessage(buffer: DataChannel.Buffer) {
                 if (buffer.binary) return
@@ -155,6 +167,11 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
                 if (runCatching { JSONObject(json).optString("type") }.getOrNull() == "controlStatus") {
                     val status = runCatching { ProtocolJson.decodeFromString<ControlStatus>(json) }.getOrNull() ?: return
                     updateControlStatus(status.ready, status.reason)
+                    return
+                }
+                if (runCatching { JSONObject(json).optString("type") }.getOrNull() == "voiceState") {
+                    val state = runCatching { ProtocolJson.decodeFromString<VoiceState>(json) }.getOrNull() ?: return
+                    mainHandler.post { onRemoteVoiceState?.invoke(state) }
                     return
                 }
                 val result = runCatching { ProtocolJson.decodeFromString<ControlResult>(json) }.getOrNull() ?: return
@@ -175,6 +192,26 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
         mainHandler.post { onControlStatus?.invoke(ready, reason) }
     }
 
+    fun joinVoice(): Boolean {
+        if (closed.get() || voiceJoined) return voiceJoined
+        val sender = peer.transceivers.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }?.sender ?: return false
+        val newSource = factory.createAudioSource(MediaConstraints())
+        val newTrack = factory.createAudioTrack("voice-helper", newSource).apply { setEnabled(true) }
+        if (!sender.setTrack(newTrack, false)) { newTrack.dispose(); newSource.dispose(); sendVoiceState("attach_failed"); return false }
+        voiceSource = newSource; voiceTrack = newTrack; voiceJoined = true; voiceMuted = false; sendVoiceState(); return true
+    }
+    fun setVoiceMuted(muted: Boolean) { if (voiceJoined) { voiceMuted = muted; voiceTrack?.setEnabled(!muted); sendVoiceState() } }
+    fun leaveVoice(reason: String? = null) {
+        peer.transceivers.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }?.sender?.setTrack(null, false)
+        voiceTrack?.dispose(); voiceSource?.dispose(); voiceTrack = null; voiceSource = null; voiceJoined = false; voiceMuted = true; sendVoiceState(reason)
+    }
+    fun localVoiceState() = VoiceState(joined = voiceJoined, muted = voiceMuted)
+    fun reportVoicePermissionFailure(permanent: Boolean) = sendVoiceState(if (permanent) "permission_permanently_denied" else "permission_denied")
+    private fun sendVoiceState(reason: String? = null) {
+        val state = VoiceState(joined = voiceJoined, muted = voiceMuted, reason = reason)
+        channel?.takeIf { it.state() == DataChannel.State.OPEN }?.send(DataChannel.Buffer(ByteBuffer.wrap(ProtocolJson.encodeToString(state).encodeToByteArray()), false))
+    }
+
     private inner class Observer : PeerConnection.Observer by HelperPeerObserver() {
         override fun onIceCandidate(candidate: IceCandidate) {
             client.signal("ice", JSONObject()
@@ -192,6 +229,7 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
             observeControlChannel(dataChannel)
         }
         override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
+            (receiver.track() as? AudioTrack)?.let { it.setEnabled(true); return }
             val track = receiver.track() as? VideoTrack ?: return
             Log.i(TAG, "onAddTrack video track=${track.id()}")
             remoteTrack = track
@@ -212,12 +250,15 @@ class HelperRtcEngine(private val context: Context, private val client: Rendezvo
         pendingResults.clear()
         onControlStatus = null
         onControlResult = null
+        onRemoteVoiceState = null
         client.signalListener = null
         remoteTrack?.let { track -> renderer?.let(track::removeSink) }
+        leaveVoice("session_ended")
         renderer?.release()
         channel?.dispose()
         peer.close()
         factory.dispose()
+        audioDeviceModule.release()
         egl.release()
     }
 

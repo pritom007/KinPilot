@@ -46,6 +46,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import family.remote.parent.capture.ScreenShareService
 import family.remote.parent.control.RemoteControlService
+import family.remote.parent.rtc.VoiceAudioRoute
 import family.remote.protocol.RendezvousClient
 import family.remote.protocol.SupportCode
 import com.journeyapps.barcodescanner.ScanContract
@@ -147,6 +148,11 @@ class MainActivity : ComponentActivity() {
         var accepted by remember { mutableStateOf(false) }
         var sharing by remember { mutableStateOf(false) }
         var controlAvailable by remember { mutableStateOf(RemoteControlService.isAvailable()) }
+        val voiceRoute = remember { VoiceAudioRoute(applicationContext) }
+        var voiceJoined by remember { mutableStateOf(false) }
+        var voiceMuted by remember { mutableStateOf(true) }
+        var voiceRouteLabel by remember { mutableStateOf("Speaker") }
+        var remoteVoice by remember { mutableStateOf("Your helper has not joined voice") }
         val leaveScreen: () -> Unit = {
             if (sharing) {
                 status = "Screen sharing is still active. Use the notification Stop button to end it."
@@ -155,6 +161,12 @@ class MainActivity : ComponentActivity() {
         }
         BackHandler(onBack = leaveScreen)
         val controlAvailabilityListener = remember { { available: Boolean -> runOnUiThread { controlAvailable = available } } }
+        val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted && sharing) {
+                startService(Intent(this, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_JOIN))
+                voiceRoute.begin(); voiceJoined = true; voiceMuted = false; voiceRouteLabel = voiceRoute.label
+            } else if (!granted) status = "Microphone permission was not granted. Screen sharing continues without voice."
+        }
         val client = remember {
             RendezvousClient(object : RendezvousClient.Listener {
                 override fun onOpen() { runOnUiThread { ParentSessionState.client?.createRoom() } }
@@ -181,10 +193,16 @@ class MainActivity : ComponentActivity() {
                 client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false
                 status = "Session ended: $reason"
             } }
+            family.remote.parent.capture.ScreenSessionCoordinator.voiceListener = { local, remote -> runOnUiThread {
+                voiceJoined = local.joined; voiceMuted = local.muted
+                remote?.let { remoteVoice = if (!it.joined) "Your helper has not joined voice" else if (it.muted) "Your helper is muted" else "Your helper joined voice" }
+            } }
             RemoteControlService.addAvailabilityListener(controlAvailabilityListener)
             onDispose {
                 stopService(Intent(this@MainActivity, ScreenShareService::class.java))
                 family.remote.parent.capture.SessionEvents.listener = null
+                family.remote.parent.capture.ScreenSessionCoordinator.voiceListener = null
+                voiceRoute.end()
                 RemoteControlService.removeAvailabilityListener(controlAvailabilityListener)
                 client.close()
                 if (ParentSessionState.client === client) ParentSessionState.client = null
@@ -294,7 +312,29 @@ class MainActivity : ComponentActivity() {
 
             if (sharing) {
                 Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.errorContainer) {
-                    Text("Screen sharing is active", Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Screen sharing is active", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
+                        Text(remoteVoice, style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!voiceJoined) Button(onClick = {
+                                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                    startService(Intent(this@MainActivity, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_JOIN))
+                                    voiceRoute.begin(); voiceJoined = true; voiceMuted = false; voiceRouteLabel = voiceRoute.label
+                                } else microphone.launch(Manifest.permission.RECORD_AUDIO)
+                            }) { Text("Join voice") }
+                            else {
+                                FilledTonalButton(onClick = {
+                                    voiceMuted = !voiceMuted
+                                    startService(Intent(this@MainActivity, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_MUTE).putExtra(ScreenShareService.EXTRA_MUTED, voiceMuted))
+                                }) { Text(if (voiceMuted) "Unmute" else "Mute") }
+                                FilledTonalButton(onClick = { voiceRouteLabel = voiceRoute.cycle() }) { Text(voiceRouteLabel) }
+                                OutlinedButton(onClick = {
+                                    startService(Intent(this@MainActivity, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_LEAVE))
+                                    voiceRoute.end(); voiceJoined = false; voiceMuted = true
+                                }) { Text("Leave") }
+                            }
+                        }
+                    }
                 }
             }
 

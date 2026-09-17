@@ -55,4 +55,13 @@ describe("parseControlMessage",()=>{
     expect(parseControlMessage('{"type":"controlStatus","ready":"yes"}')).toBeUndefined();
     expect(parseControlMessage("not-json")).toBeUndefined();
   });
+
+  it("parses joined, muted, and permission-failure voice states",()=>{
+    expect(parseControlMessage('{"type":"voiceState","available":true,"joined":true,"muted":false}')).toEqual({
+      kind:"voice",state:{available:true,joined:true,muted:false},
+    });
+    expect(parseControlMessage('{"type":"voiceState","available":true,"joined":false,"muted":true,"reason":"permission_denied"}')).toEqual({
+      kind:"voice",state:{available:true,joined:false,muted:true,reason:"permission_denied"},
+    });
+  });
 });
