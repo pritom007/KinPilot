@@ -5,12 +5,18 @@ import{HelperRtcSession}from"./rtc";
 
 export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:RendezvousClient;expiresAt:number;onEnded:()=>void}){
   const video=useRef<HTMLVideoElement>(null);
+  const audio=useRef<HTMLAudioElement>(null);
   const pointer=useRef<{x:number;y:number;at:number}>();
   const pendingStream=useRef<MediaStream>();
   const[connection,setConnection]=useState("connecting");
   const[controlReady,setControlReady]=useState(false);
   const[text,setText]=useState("");
   const[feedback,setFeedback]=useState("Checking remote control availability…");
+  const[voiceJoined,setVoiceJoined]=useState(false);
+  const[voiceMuted,setVoiceMuted]=useState(true);
+  const[remoteVoice,setRemoteVoice]=useState("Other person has not joined voice");
+  const[tapToHear,setTapToHear]=useState(false);
+  const[voiceFeedback,setVoiceFeedback]=useState("Voice is optional and uses no camera.");
   const rtc=useMemo(()=>new HelperRtcSession(rendezvous),[rendezvous]);
   const control=useMemo(()=>new ControlSender(value=>{
     if(rtc.send(value))return;
@@ -29,6 +35,11 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
       attempt();
     };
     rtc.onStream=attachStream;
+    rtc.onAudioStream=stream=>{
+      const el=audio.current;if(!el)return;el.srcObject=stream;
+      void el.play().then(()=>setTapToHear(false)).catch(()=>setTapToHear(true));
+    };
+    rtc.onVoiceState=state=>setRemoteVoice(!state.joined?"Other person has not joined voice":state.muted?"Other person is muted":"Other person joined voice");
     if(pendingStream.current){attachStream(pendingStream.current);pendingStream.current=undefined;}
 
     rtc.onState=state=>{
@@ -76,6 +87,17 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
       <p className={`control-status ${controlReady?"ready":"unavailable"}`} role="status">
         {controlReady?"Remote control ready":feedback}
       </p>
+      <audio ref={audio} autoPlay playsInline/>
+      <section className="voice-panel" aria-label="Voice controls">
+        <div><strong>Voice</strong><span>{voiceFeedback} {remoteVoice}.</span></div>
+        <div className="voice-actions">
+          {!voiceJoined?<button onClick={async()=>{try{await rtc.joinVoice();setVoiceJoined(true);setVoiceMuted(false);setVoiceFeedback("Voice connected.");await audio.current?.play().catch(()=>setTapToHear(true));}catch{setVoiceFeedback("Microphone permission was denied or unavailable.");}}}>Join voice</button>:<>
+            <button onClick={()=>{const next=!voiceMuted;rtc.setVoiceMuted(next);setVoiceMuted(next);}}>{voiceMuted?"Unmute":"Mute"}</button>
+            <button onClick={()=>{void rtc.leaveVoice();setVoiceJoined(false);setVoiceMuted(true);setVoiceFeedback("You left voice.");}}>Leave voice</button>
+          </>}
+          {tapToHear&&<button className="primary" onClick={()=>void audio.current?.play().then(()=>setTapToHear(false))}>Tap to hear audio</button>}
+        </div>
+      </section>
       <section className={`device-stage ${controlReady?"":"view-only"}`} onClick={tapToPlay}>
         <video
           ref={video}

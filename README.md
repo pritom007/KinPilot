@@ -1,6 +1,6 @@
 # KinPilot
 
-KinPilot is consent-first remote assistance for Android 12+. It uses a tiny, stateless rendezvous service only to introduce two devices; screen video and controls then travel directly over encrypted WebRTC.
+KinPilot is consent-first remote assistance for Android 12+. It uses a tiny, stateless rendezvous service only to introduce two devices; screen video, controls, and optional two-way voice then travel directly over encrypted WebRTC.
 
 - `android/parent`: explicit approval, Android screen sharing, and accessibility-based controls.
 - `android/helper`: native Android remote console.

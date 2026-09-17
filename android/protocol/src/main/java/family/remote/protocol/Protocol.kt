@@ -32,7 +32,16 @@ data class SignalMessage(val sessionId: String, val senderId: String, val kind: 
 enum class SignalKind { OFFER, ANSWER, ICE }
 
 @Serializable
-data class ClientCapabilities(val protocolVersion: Int = CURRENT_PROTOCOL_VERSION, val video: Boolean = true, val control: Boolean = true, val textInput: Boolean = true, val audio: Boolean = false)
+data class ClientCapabilities(val protocolVersion: Int = CURRENT_PROTOCOL_VERSION, val video: Boolean = true, val control: Boolean = true, val textInput: Boolean = true, val audio: Boolean = true)
+
+@Serializable
+data class VoiceState(
+    val type: String = "voiceState",
+    val available: Boolean = true,
+    val joined: Boolean = false,
+    val muted: Boolean = true,
+    val reason: String? = null
+)
 
 @Serializable
 data class ControlStatus(val type: String = "controlStatus", val ready: Boolean, val reason: String? = null)

@@ -1,5 +1,9 @@
 package family.remote.parent
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import family.remote.parent.rtc.HelperRtcEngine
+import family.remote.parent.rtc.VoiceAudioRoute
 import family.remote.protocol.ControlCommand
 import family.remote.protocol.RendezvousClient
 import kotlinx.coroutines.delay
@@ -24,6 +29,16 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
     var feedback by remember { mutableStateOf("Connecting securely…") }
     var controlReady by remember { mutableStateOf(false) }
     var remaining by remember { mutableLongStateOf((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L)) }
+    val audioRoute = remember { VoiceAudioRoute(context.applicationContext) }
+    var voiceJoined by remember { mutableStateOf(false) }
+    var voiceMuted by remember { mutableStateOf(true) }
+    var remoteVoice by remember { mutableStateOf("Other person has not joined voice") }
+    var route by remember { mutableStateOf("Speaker") }
+    var voiceFeedback by remember { mutableStateOf("Voice is optional and starts only when you join.") }
+    val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && engine.joinVoice()) { audioRoute.begin(); voiceJoined = true; voiceMuted = false; route = audioRoute.label; voiceFeedback = "Voice connected" }
+        else { engine.reportVoicePermissionFailure(false); voiceFeedback = "Microphone permission is required for voice" }
+    }
 
     DisposableEffect(engine) {
         engine.onControlStatus = { ready, reason ->
@@ -38,8 +53,11 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
                 "Screen viewing only · ask them to enable KinPilot in Accessibility settings"
             } else "Action unavailable · ${result.reason ?: "unknown error"}"
         }
+        engine.onRemoteVoiceState = { state ->
+            remoteVoice = when { !state.joined -> "Other person has not joined voice"; state.muted -> "Other person is muted"; else -> "Other person is speaking-enabled" }
+        }
         engine.start()
-        onDispose { engine.onControlStatus = null; engine.onControlResult = null; engine.close() }
+        onDispose { audioRoute.end(); engine.onControlStatus = null; engine.onControlResult = null; engine.onRemoteVoiceState = null; engine.close() }
     }
     LaunchedEffect(expiresAt) {
         while (remaining > 0L) {
@@ -91,6 +109,25 @@ fun RemoteSupportScreen(client: RendezvousClient, expiresAt: Long, onEnd: () -> 
         }
 
         Text("Tap, hold, or swipe directly on the shared screen.", style = MaterialTheme.typography.bodySmall)
+
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .65f)) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Voice", style = MaterialTheme.typography.titleMedium)
+                Text("$voiceFeedback · $remoteVoice", style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!voiceJoined) Button(onClick = {
+                        if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            if (engine.joinVoice()) { audioRoute.begin(); voiceJoined = true; voiceMuted = false; route = audioRoute.label; voiceFeedback = "Voice connected" }
+                        } else microphone.launch(Manifest.permission.RECORD_AUDIO)
+                    }) { Text("Join voice") }
+                    else {
+                        FilledTonalButton(onClick = { voiceMuted = !voiceMuted; engine.setVoiceMuted(voiceMuted) }) { Text(if (voiceMuted) "Unmute" else "Mute") }
+                        FilledTonalButton(onClick = { route = audioRoute.cycle() }) { Text(route) }
+                        OutlinedButton(onClick = { engine.leaveVoice(); audioRoute.end(); voiceJoined = false; voiceMuted = true; voiceFeedback = "You left voice" }) { Text("Leave") }
+                    }
+                }
+            }
+        }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AssistChip(
