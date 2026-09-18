@@ -41,6 +41,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.core.content.ContextCompat
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
@@ -87,24 +91,24 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(16.dp))
             Text("KinPilot", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
             Text(
-                "A little closer. A lot more helpful.",
+                "Help from family, wherever they are.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
             )
             RoleCard(
-                title = "Get support",
-                description = "Let someone you trust lend a hand. You stay in control.",
-                action = "Create support code",
+                title = "I need help",
+                description = "Ask someone you trust to help with this phone.",
+                action = "Get help with my phone",
                 accent = MaterialTheme.colorScheme.primary,
                 onClick = onGetSupport
             )
             Spacer(Modifier.height(16.dp))
             RoleCard(
                 title = "Help someone",
-                description = "Scan their QR or paste a code. Connect in moments.",
-                action = "Enter a code",
+                description = "Use their code or scan their QR to help with their phone.",
+                action = "Help with another phone",
                 accent = MaterialTheme.colorScheme.secondary,
                 onClick = onHelp
             )
@@ -134,7 +138,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(action) }
+                Button(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp)) { Text(action, textAlign = TextAlign.Center) }
             }
         }
     }
@@ -237,11 +241,38 @@ class MainActivity : ComponentActivity() {
         }
         val clipboard = LocalClipboardManager.current
 
+        request?.let { (id, name) ->
+            AlertDialog(
+                onDismissRequest = { client.respond(id, false); request = null },
+                title = { Text("$name wants to help") },
+                text = { Text("Do you recognize this person? If you allow them, Android will ask you to share your screen. They can then see your screen and, when remote control is enabled, use your phone. You can stop at any time.") },
+                confirmButton = {
+                    Button(onClick = { client.respond(id, true); request = null }, modifier = Modifier.heightIn(min = 56.dp)) { Text("Yes, allow help") }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { client.respond(id, false); request = null }, modifier = Modifier.heightIn(min = 56.dp)) { Text("No, decline") }
+                }
+            )
+        }
+
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            ScreenHeader("Get support", "You approve every helper and Android always asks before sharing.", leaveScreen)
+            ScreenHeader("Help with my phone", if (sharing) "Your helper can see your screen." else "1. Share your code   2. Allow your helper   3. Share your screen", leaveScreen)
+
+            if (sharing) {
+                Button(
+                    onClick = {
+                        stopService(Intent(this@MainActivity, ScreenShareService::class.java))
+                        client.close(); voiceRoute.end()
+                        code = null; request = null; connecting = false; accepted = false; sharing = false
+                        voiceJoined = false; voiceMuted = true; status = "Sharing stopped. Your helper can no longer see or use your phone."
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                ) { Text("Stop sharing", fontWeight = FontWeight.Bold) }
+            }
 
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) {
-                Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(status, modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }.padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
 
             Surface(
@@ -275,11 +306,11 @@ class MainActivity : ComponentActivity() {
                 ) { Text(if (connecting) "Creating code…" else "Create support code") }
             }
 
-            code?.let { value ->
+            code?.takeIf { !sharing }?.let { value ->
                 val image = remember(value) { qr("https://kinpilot.netlify.app/join#$value") }
                 Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("ONE-TIME SUPPORT CODE", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text("Tell your helper this code", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
                         Image(image.asImageBitmap(), "QR support code", Modifier.size(210.dp))
                         Text("Share this QR or code with one trusted helper.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -291,20 +322,6 @@ class MainActivity : ComponentActivity() {
                                     putExtra(Intent.EXTRA_TEXT, "Help me on KinPilot: https://kinpilot.netlify.app/join#$value")
                                 }, "Share support link"))
                             }) { Text("Share link") }
-                        }
-                    }
-                }
-            }
-
-            request?.let { (id, name) ->
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer), shape = RoundedCornerShape(20.dp)) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Connection request", style = MaterialTheme.typography.labelLarge)
-                        Text("$name wants to help", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text("Only accept if you recognize this person.")
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedButton(onClick = { client.respond(id, false); request = null }, modifier = Modifier.weight(1f)) { Text("Decline") }
-                            Button(onClick = { client.respond(id, true); request = null }, modifier = Modifier.weight(1f)) { Text("Accept") }
                         }
                     }
                 }
@@ -348,7 +365,7 @@ class MainActivity : ComponentActivity() {
                     else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
                 }, modifier = Modifier.weight(1f)) { Text("Notifications") }
             }
-            if (code != null) OutlinedButton(onClick = {
+            if (code != null && !sharing) OutlinedButton(onClick = {
                 stopService(Intent(this@MainActivity, ScreenShareService::class.java))
                 client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false; status = "Session cancelled."
             }, modifier = Modifier.fillMaxWidth()) { Text("Cancel session") }
@@ -482,21 +499,27 @@ private fun BrandMark() {
 @Composable
 private fun KinPilotTheme(content: @Composable () -> Unit) {
     val scheme = lightColorScheme(
-        primary = Color(0xFF5954D6),
+        primary = Color(0xFF286354),
         onPrimary = Color.White,
-        primaryContainer = Color(0xFFE5E1FF),
-        onPrimaryContainer = Color(0xFF201A57),
+        primaryContainer = Color(0xFFD9EFE4),
+        onPrimaryContainer = Color(0xFF123B30),
         secondary = Color(0xFF087F8C),
         secondaryContainer = Color(0xFFD9E9F7),
         tertiary = Color(0xFFF5B429),
         tertiaryContainer = Color(0xFFFFE9B0),
-        background = Color(0xFFF7F6FC),
+        background = Color(0xFFF7F8F3),
         surface = Color.White,
         surfaceVariant = Color(0xFFEAE8F3)
     )
     val dark = darkColorScheme(primary = Color(0xFFC6BFFF), secondary = Color(0xFF7BD8DE),
         background = Color(0xFF11121D), surface = Color(0xFF1B1C2C), surfaceVariant = Color(0xFF292B40))
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) dark else scheme, content = content)
+    val typography = Typography(
+        bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 20.sp, lineHeight = 29.sp),
+        bodyMedium = androidx.compose.ui.text.TextStyle(fontSize = 18.sp, lineHeight = 27.sp),
+        bodySmall = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+        labelLarge = androidx.compose.ui.text.TextStyle(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+    )
+    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) dark else scheme, typography = typography, content = content)
 }
 
 private fun qr(text: String): Bitmap {
