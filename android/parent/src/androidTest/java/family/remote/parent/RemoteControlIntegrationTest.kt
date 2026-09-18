@@ -42,11 +42,12 @@ class RemoteControlIntegrationTest {
             assertTrue("KinPilot should become foreground", device.wait(Until.hasObject(By.pkg(context.packageName)), 10000))
             // The role cards extend below the fold on the CI emulator. Scroll only
             // during setup; the actual action assertions below use our service.
-            if (!device.hasObject(By.text("Enter a code"))) {
-                UiScrollable(UiSelector().scrollable(true)).scrollIntoView(UiSelector().text("Enter a code"))
+            val helperAction = "Help with another phone"
+            if (!device.hasObject(By.text(helperAction))) {
+                UiScrollable(UiSelector().scrollable(true)).scrollIntoView(UiSelector().text(helperAction))
             }
-            val enter = device.wait(Until.findObject(By.text("Enter a code")), 10000)
-            assertNotNull("Home screen should appear", enter)
+            val enter = device.wait(Until.findObject(By.text(helperAction)), 10000)
+            assertNotNull("Home screen should show the '$helperAction' action", enter)
             instrumentation.runOnMainSync { RemoteControlService.beginSession() }
             val bounds = enter.visibleBounds
             val wm = context.getSystemService(android.view.WindowManager::class.java).maximumWindowMetrics.bounds
