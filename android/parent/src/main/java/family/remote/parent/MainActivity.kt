@@ -2,6 +2,11 @@ package family.remote.parent
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
+import android.view.WindowManager
+import android.widget.Toast
 import android.graphics.Bitmap
 import android.net.Uri
 import android.media.projection.MediaProjectionManager
@@ -41,7 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -70,7 +75,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun KinPilotApp() {
-        var page by rememberSaveable { mutableStateOf(AppPage.HOME) }
+        var page by rememberSaveable { mutableStateOf(if (intent.getBooleanExtra("getHelp", false)) AppPage.GET_SUPPORT else AppPage.HOME) }
         Surface(Modifier.fillMaxSize().safeDrawingPadding(), color = MaterialTheme.colorScheme.background) {
             when (page) {
                 AppPage.HOME -> HomeScreen(onGetSupport = { page = AppPage.GET_SUPPORT }, onHelp = { page = AppPage.HELP_SOMEONE })
@@ -113,6 +118,13 @@ class MainActivity : ComponentActivity() {
                 onClick = onHelp
             )
             Spacer(Modifier.height(16.dp))
+            OutlinedButton(onClick = { pinHelpShortcut() }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                Text("Add Get help to my home screen")
+            }
+            Text("Next time, open Get help directly from your phone’s home screen.", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(16.dp))
+            PhoneTools()
+            Spacer(Modifier.height(16.dp))
             UpdateCard()
             Spacer(Modifier.height(24.dp))
             Text(
@@ -152,6 +164,12 @@ class MainActivity : ComponentActivity() {
         var accepted by remember { mutableStateOf(false) }
         var sharing by remember { mutableStateOf(false) }
         var controlAvailable by remember { mutableStateOf(RemoteControlService.isAvailable()) }
+        var setupExpanded by rememberSaveable { mutableStateOf(false) }
+        var showQr by rememberSaveable { mutableStateOf(false) }
+        var codeExpiresAt by remember { mutableStateOf(0L) }
+        var secondsLeft by remember { mutableStateOf(0L) }
+        var approved by remember { mutableStateOf(false) }
+        var helperName by remember { mutableStateOf("") }
         val voiceRoute = remember { VoiceAudioRoute(applicationContext) }
         var voiceJoined by remember { mutableStateOf(false) }
         var voiceMuted by remember { mutableStateOf(true) }
@@ -175,27 +193,32 @@ class MainActivity : ComponentActivity() {
             RendezvousClient(object : RendezvousClient.Listener {
                 override fun onOpen() { runOnUiThread { ParentSessionState.client?.createRoom() } }
                 override fun onRoomCreated(value: String, expiresAt: Long) { runOnUiThread {
-                    code = value; connecting = false; status = "Code ready · expires in 10 minutes"
+                    codeExpiresAt = expiresAt; secondsLeft = ((expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+                    approved = false; helperName = ""; showQr = false
+                    code = value; connecting = false; status = "Send this code to someone you trust. Keep KinPilot open while you wait."
                 } }
                 override fun onJoinRequest(id: String, helperName: String) { runOnUiThread {
                     request = id to helperName; status = "$helperName is asking to connect."
                 } }
-                override fun onAccepted(expiresAt: Long) { runOnUiThread { accepted = true; status = "Approved. Choose what Android should share." } }
+                override fun onAccepted(expiresAt: Long) { runOnUiThread { approved = true; accepted = true; status = "Approved. Choose what Android should share." } }
                 override fun onEnded(reason: String) { runOnUiThread {
                     stopService(Intent(this@MainActivity, ScreenShareService::class.java))
-                    code = null; request = null; connecting = false; sharing = false; status = "Session ended."
+                    code = null; request = null; connecting = false; sharing = false; approved = false; accepted = false
+                    voiceRoute.end(); voiceJoined = false; voiceMuted = true
+                    status = "Help has ended. To ask again, create a new code."
                 } }
                 override fun onError(value: String) { runOnUiThread {
                     connecting = false
-                    status = if (value == "service_unavailable") "Could not reach the support service. Try again." else "Could not continue: $value"
+                    status = "We could not connect. Check your internet, then try again."
                 } }
             })
         }
         DisposableEffect(client) {
             ParentSessionState.client = client
             family.remote.parent.capture.SessionEvents.listener = { reason -> runOnUiThread {
-                client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false
-                status = "Session ended: $reason"
+                client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false; approved = false
+                voiceRoute.end(); voiceJoined = false; voiceMuted = true
+                status = "Sharing has stopped. Your helper can no longer see or use your phone."
             } }
             family.remote.parent.capture.ScreenSessionCoordinator.voiceListener = { local, remote -> runOnUiThread {
                 voiceJoined = local.joined; voiceMuted = local.muted
@@ -222,7 +245,7 @@ class MainActivity : ComponentActivity() {
                     .putExtra("sessionId", "ephemeral"))
                 sharing = true
                 status = "Your screen is being shared. Use the notification to stop anytime."
-            } else if (accepted) status = "Screen sharing was not started."
+            } else if (accepted) status = "Nothing is shared yet. Tap Start sharing when you are ready."
             accepted = false
         }
         LaunchedEffect(accepted) {
@@ -240,6 +263,22 @@ class MainActivity : ComponentActivity() {
             client.connect()
         }
         val clipboard = LocalClipboardManager.current
+        LaunchedEffect(code, codeExpiresAt, approved) {
+            while (code != null && !approved) {
+                secondsLeft = ((codeExpiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+                if (secondsLeft == 0L) {
+                    client.close(); code = null; request = null; connecting = false
+                    status = "This code has expired. Create a new code and send it to your helper."
+                    break
+                }
+                delay(1000)
+            }
+        }
+        // Keep only this foreground support screen awake; never acquire a wake lock.
+        DisposableEffect(code != null || sharing) {
+            if (code != null || sharing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        }
 
         request?.let { (id, name) ->
             AlertDialog(
@@ -247,7 +286,7 @@ class MainActivity : ComponentActivity() {
                 title = { Text("$name wants to help") },
                 text = { Text("Do you recognize this person? If you allow them, Android will ask you to share your screen. They can then see your screen and, when remote control is enabled, use your phone. You can stop at any time.") },
                 confirmButton = {
-                    Button(onClick = { client.respond(id, true); request = null }, modifier = Modifier.heightIn(min = 56.dp)) { Text("Yes, allow help") }
+                    Button(onClick = { helperName = name; client.respond(id, true); request = null }, modifier = Modifier.heightIn(min = 56.dp)) { Text("Yes, allow help") }
                 },
                 dismissButton = {
                     OutlinedButton(onClick = { client.respond(id, false); request = null }, modifier = Modifier.heightIn(min = 56.dp)) { Text("No, decline") }
@@ -256,14 +295,19 @@ class MainActivity : ComponentActivity() {
         }
 
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            ScreenHeader("Help with my phone", if (sharing) "Your helper can see your screen." else "1. Share your code   2. Allow your helper   3. Share your screen", leaveScreen)
+            ScreenHeader("Help with my phone", if (sharing) "$helperName can see your screen." else "We’ll guide you one step at a time.", leaveScreen)
+
+            if (!sharing) {
+                Text(if (approved) "Next: share your screen" else if (code != null) "Next: send your code" else "Let’s get you connected", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                if (connecting) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
 
             if (sharing) {
                 Button(
                     onClick = {
                         stopService(Intent(this@MainActivity, ScreenShareService::class.java))
                         client.close(); voiceRoute.end()
-                        code = null; request = null; connecting = false; accepted = false; sharing = false
+                        code = null; request = null; connecting = false; accepted = false; sharing = false; approved = false
                         voiceJoined = false; voiceMuted = true; status = "Sharing stopped. Your helper can no longer see or use your phone."
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -275,53 +319,37 @@ class MainActivity : ComponentActivity() {
                 Text(status, modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }.padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
 
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = if (controlAvailable) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer
-            ) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        if (controlAvailable) "Remote control is ready" else "Enable remote control",
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        if (controlAvailable) "Your helper can use tap, swipe, and navigation after you approve screen sharing."
-                        else "Screen sharing works without this, but your helper cannot tap, swipe, or go Back until KinPilot is enabled in Android Accessibility settings."
-                    )
-                    if (!controlAvailable) {
-                        Text("Choose Downloaded apps (or Installed services) → KinPilot → Use KinPilot. If Android blocks this sideloaded app, open App info → ⋮ → Allow restricted settings, then return here. Only do this for the KinPilot APK you trust.")
-                        Text("Enabling this service lets your approved helper read screen content and perform taps, swipes, navigation, and typing during a support session. Nothing is recorded. You can stop sharing at any time.")
-                        FilledTonalButton(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
-                            Text("Open Accessibility settings")
-                        }
-                    }
-                }
-            }
-
-            if (code == null) {
+            if (code == null && !sharing) {
                 Button(
                     enabled = !connecting,
                     onClick = { client.close(); connecting = true; status = "Starting the private connection…"; client.connect() },
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
                 ) { Text(if (connecting) "Creating code…" else "Create support code") }
             }
 
-            code?.takeIf { !sharing }?.let { value ->
-                val image = remember(value) { qr("https://kinpilot.netlify.app/join#$value") }
+            if (approved && !sharing) {
+                Text("Android will ask what to share. Choose your entire screen so your helper can help across apps. Nothing is shared until you approve.")
+                Button(onClick = { accepted = true }, enabled = !accepted, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Start sharing") }
+            }
+
+            code?.takeIf { !sharing && !approved }?.let { value ->
                 Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Tell your helper this code", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        Text("Your private help code", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
-                        Image(image.asImageBitmap(), "QR support code", Modifier.size(210.dp))
-                        Text("Share this QR or code with one trusted helper.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(value)) }) { Text("Copy code") }
-                            TextButton(onClick = {
+                        Text("Valid for ${secondsLeft / 60}:${(secondsLeft % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.bodyMedium)
+                        Button(onClick = {
                                 startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_TEXT, "Help me on KinPilot: https://kinpilot.netlify.app/join#$value")
                                 }, "Share support link"))
-                            }) { Text("Share link") }
+                            }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 56.dp)) { Text("Send code to my helper") }
+                        Text("Choose your helper in your messaging app, send the link, then return here. Or read the code aloud on a call.", modifier = Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(value)); Toast.makeText(this@MainActivity, "Code copied", Toast.LENGTH_SHORT).show() }) { Text("Copy code") }
+                        TextButton(onClick = { showQr = !showQr }) { Text(if (showQr) "Hide QR code" else "Helper beside you? Show QR code") }
+                        if (showQr) {
+                            val image = remember(value) { qr("https://kinpilot.netlify.app/join#$value") }
+                            Image(image.asImageBitmap(), "Ask your helper to scan this QR code", Modifier.sizeIn(maxWidth = 210.dp).fillMaxWidth().aspectRatio(1f))
                         }
                     }
                 }
@@ -332,42 +360,52 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Screen sharing is active", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
                         Text(remoteVoice, style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (!voiceJoined) Button(onClick = {
                                 if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                                     startService(Intent(this@MainActivity, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_JOIN))
                                     voiceRoute.begin(); voiceJoined = true; voiceMuted = false; voiceRouteLabel = voiceRoute.label
                                 } else microphone.launch(Manifest.permission.RECORD_AUDIO)
-                            }) { Text("Join voice") }
+                            }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Talk to my helper") }
                             else {
                                 FilledTonalButton(onClick = {
                                     voiceMuted = !voiceMuted
                                     startService(Intent(this@MainActivity, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_MUTE).putExtra(ScreenShareService.EXTRA_MUTED, voiceMuted))
-                                }) { Text(if (voiceMuted) "Unmute" else "Mute") }
-                                FilledTonalButton(onClick = { voiceRouteLabel = voiceRoute.cycle() }) { Text(voiceRouteLabel) }
+                                }, modifier = Modifier.fillMaxWidth()) { Text(if (voiceMuted) "Turn my microphone on" else "Mute my microphone") }
+                                FilledTonalButton(onClick = { voiceRouteLabel = voiceRoute.cycle() }, modifier = Modifier.fillMaxWidth()) { Text("Sound output: $voiceRouteLabel") }
                                 OutlinedButton(onClick = {
                                     startService(Intent(this@MainActivity, ScreenShareService::class.java).setAction(ScreenShareService.ACTION_VOICE_LEAVE))
                                     voiceRoute.end(); voiceJoined = false; voiceMuted = true
-                                }) { Text("Leave") }
+                                }, modifier = Modifier.fillMaxWidth()) { Text("End voice only") }
                             }
                         }
                     }
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(
-                    onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                    modifier = Modifier.weight(1f)
-                ) { Text(if (controlAvailable) "Control settings" else "Enable control") }
-                FilledTonalButton(onClick = {
+            if (!sharing && !approved) OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (controlAvailable) "Ready for hands-on help" else "Viewing only for now", fontWeight = FontWeight.SemiBold)
+                    if (!controlAvailable) {
+                        Text("Your helper can see your screen after you approve, but cannot tap things for you yet.")
+                        TextButton(onClick = { setupExpanded = !setupExpanded }) { Text(if (setupExpanded) "Hide setup steps" else "Help me set up control") }
+                        if (setupExpanded) {
+                            Text("1. Open the settings below.\n2. Choose Downloaded apps or Installed services.\n3. Choose KinPilot and turn on Use KinPilot.\n4. Come back here. We’ll check it automatically.")
+                            Text("If Android blocks this: open KinPilot’s App info → ⋮ → Allow restricted settings. Only do this for the KinPilot APK you trust.")
+                            Text("Enabling this service lets your approved helper read screen content and perform taps, swipes, navigation, and typing during a support session. Nothing is recorded. You can stop sharing at any time.")
+                            FilledTonalButton(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("I understand — open settings") }
+                        }
+                    }
+                }
+            }
+            if (!sharing) TextButton(onClick = {
                     if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                     else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
-                }, modifier = Modifier.weight(1f)) { Text("Notifications") }
-            }
+                }) { Text("Allow session notifications") }
+            PhoneTools()
             if (code != null && !sharing) OutlinedButton(onClick = {
                 stopService(Intent(this@MainActivity, ScreenShareService::class.java))
-                client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false; status = "Session cancelled."
+                client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false; approved = false; status = "Request cancelled. Create a new code whenever you need help."
             }, modifier = Modifier.fillMaxWidth()) { Text("Cancel session") }
         }
     }
@@ -470,6 +508,56 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun PhoneTools() {
+        var expanded by rememberSaveable { mutableStateOf(false) }
+        OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (expanded) "Hide phone tools" else "Phone tools", style = MaterialTheme.typography.titleMedium)
+                }
+                if (expanded) {
+                    Text("Quick access to common fixes. Use Back to return to KinPilot.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PhoneTool("Internet connection", "Check Wi-Fi or mobile data if you cannot connect.", Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+                    PhoneTool("Sound and volume", "Adjust the volume if you cannot hear your helper.", Settings.ACTION_SOUND_SETTINGS)
+                    PhoneTool("Text and screen size", "Make text easier to read across your whole phone.", Settings.ACTION_DISPLAY_SETTINGS)
+                    PhoneTool("Battery", "Check remaining charge and battery-saving settings.", Intent.ACTION_POWER_USAGE_SUMMARY)
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun PhoneTool(title: String, description: String, action: String) {
+        OutlinedButton(onClick = {
+            try { startActivity(Intent(action)) }
+            catch (_: android.content.ActivityNotFoundException) {
+                Toast.makeText(this, "This phone does not provide that shortcut. Open your phone’s Settings app.", Toast.LENGTH_LONG).show()
+            }
+        }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(14.dp)) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
+    private fun pinHelpShortcut() {
+        val manager = getSystemService(ShortcutManager::class.java)
+        if (manager?.isRequestPinShortcutSupported != true) {
+            Toast.makeText(this, "This launcher cannot add shortcuts. Keep the KinPilot app on your home screen instead.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val shortcut = ShortcutInfo.Builder(this, "get-help")
+            .setShortLabel("Get help")
+            .setLongLabel("Get help with my phone")
+            .setIcon(Icon.createWithResource(this, applicationInfo.icon))
+            .setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
+                .putExtra("getHelp", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+            .build()
+        manager.requestPinShortcut(shortcut, null)
+    }
+
+    @Composable
     private fun ScreenHeader(title: String, subtitle: String, onBack: () -> Unit) {
         Row(verticalAlignment = Alignment.Top) {
             TextButton(onClick = onBack, contentPadding = PaddingValues(horizontal = 0.dp)) { Text("Back") }
@@ -499,27 +587,21 @@ private fun BrandMark() {
 @Composable
 private fun KinPilotTheme(content: @Composable () -> Unit) {
     val scheme = lightColorScheme(
-        primary = Color(0xFF286354),
+        primary = Color(0xFF5954D6),
         onPrimary = Color.White,
-        primaryContainer = Color(0xFFD9EFE4),
-        onPrimaryContainer = Color(0xFF123B30),
+        primaryContainer = Color(0xFFE5E1FF),
+        onPrimaryContainer = Color(0xFF201A57),
         secondary = Color(0xFF087F8C),
         secondaryContainer = Color(0xFFD9E9F7),
         tertiary = Color(0xFFF5B429),
         tertiaryContainer = Color(0xFFFFE9B0),
-        background = Color(0xFFF7F8F3),
+        background = Color(0xFFF7F6FC),
         surface = Color.White,
         surfaceVariant = Color(0xFFEAE8F3)
     )
     val dark = darkColorScheme(primary = Color(0xFFC6BFFF), secondary = Color(0xFF7BD8DE),
         background = Color(0xFF11121D), surface = Color(0xFF1B1C2C), surfaceVariant = Color(0xFF292B40))
-    val typography = Typography(
-        bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 20.sp, lineHeight = 29.sp),
-        bodyMedium = androidx.compose.ui.text.TextStyle(fontSize = 18.sp, lineHeight = 27.sp),
-        bodySmall = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
-        labelLarge = androidx.compose.ui.text.TextStyle(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-    )
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) dark else scheme, typography = typography, content = content)
+    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) dark else scheme, content = content)
 }
 
 private fun qr(text: String): Bitmap {
