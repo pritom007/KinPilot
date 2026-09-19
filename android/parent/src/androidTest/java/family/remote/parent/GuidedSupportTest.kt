@@ -5,8 +5,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.UiScrollable
-import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -36,13 +34,28 @@ class GuidedSupportTest {
         context.startActivity(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         assertTrue(device.wait(Until.hasObject(By.pkg(context.packageName)), 10000))
-        UiScrollable(UiSelector().scrollable(true)).scrollIntoView(UiSelector().text("Phone tools"))
+        scrollToText(device, "Phone tools")
         val tools = device.wait(Until.findObject(By.text("Phone tools")), 5000)
         assertNotNull(tools)
         tools.click()
+        device.waitForIdle()
         for (title in listOf("Internet connection", "Sound and volume", "Text and screen size", "Battery")) {
-            UiScrollable(UiSelector().scrollable(true)).scrollIntoView(UiSelector().text(title))
-            assertTrue("Missing tool: $title", device.wait(Until.hasObject(By.text(title)), 5000))
+            scrollToText(device, title)
         }
+    }
+
+    // Compose exposes only visible nodes. Legacy UiScrollable can jump past
+    // newly expanded content, so move a small, bounded distance between checks.
+    private fun scrollToText(device: UiDevice, title: String) {
+        repeat(12) {
+            if (device.wait(Until.hasObject(By.text(title)), 500)) return
+            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+                device.displayWidth / 2, device.displayHeight / 2, 30)
+            device.waitForIdle()
+        }
+        val hierarchy = java.io.ByteArrayOutputStream()
+        device.dumpWindowHierarchy(hierarchy)
+        println("Synthetic phone-tools test UI: " + hierarchy.toString("UTF-8"))
+        assertTrue("Missing tool after scrolling: $title", device.hasObject(By.text(title)))
     }
 }
