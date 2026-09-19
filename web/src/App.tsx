@@ -1,6 +1,6 @@
 import{useEffect,useRef,useState}from"react";
 import{RemoteConsole}from"./RemoteConsole";
-import{RendezvousClient}from"./rendezvous";
+import{RendezvousClient,type ServerMessage}from"./rendezvous";
 
 export default function App(){
   const[code,setCode]=useState(location.hash.slice(1));
@@ -8,6 +8,7 @@ export default function App(){
   const[message,setMessage]=useState("");
   const[expiresAt,setExpiresAt]=useState<number>();
   const clientRef=useRef<RendezvousClient>();
+  const pendingSignals=useRef<Extract<ServerMessage,{type:"signal"}>[]>([]);
 
   useEffect(()=>()=>clientRef.current?.close(),[]);
 
@@ -17,6 +18,7 @@ export default function App(){
       <RemoteConsole
         rendezvous={client}
         expiresAt={expiresAt}
+        pendingSignals={pendingSignals}
         onEnded={()=>{clientRef.current?.close();clientRef.current=undefined;setExpiresAt(undefined);setMessage("Session ended.");}}
       />
     );
@@ -33,9 +35,7 @@ export default function App(){
         else if(m.type==="accepted")setExpiresAt(m.expiresAt);
         else if(m.type==="declined")setMessage("The parent declined this request.");
         else if(m.type==="error")setMessage(m.code==="room_unavailable"?"That code is invalid, used, or expired.":"The request could not be completed.");
-        // "signal" messages are handled by RemoteConsole once it mounts; they
-        // cannot arrive before the parent's screen-capture service starts,
-        // which requires user interaction after acceptance.
+        else if(m.type==="signal")pendingSignals.current.push(m);
       };
       await client.join(code,name.trim()||"Family helper");
     }catch(e){setMessage((e as Error).message);}

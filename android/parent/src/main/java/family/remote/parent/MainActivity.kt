@@ -402,7 +402,6 @@ class MainActivity : ComponentActivity() {
                     if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                     else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
                 }) { Text("Allow session notifications") }
-            PhoneTools()
             if (code != null && !sharing) OutlinedButton(onClick = {
                 stopService(Intent(this@MainActivity, ScreenShareService::class.java))
                 client.close(); code = null; request = null; connecting = false; accepted = false; sharing = false; approved = false; status = "Request cancelled. Create a new code whenever you need help."

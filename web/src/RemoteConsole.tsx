@@ -1,13 +1,14 @@
-import{useEffect,useMemo,useRef,useState}from"react";
+import{useEffect,useMemo,useRef,useState,type MutableRefObject}from"react";
 import{ControlSender,videoPoint}from"./control";
-import{RendezvousClient}from"./rendezvous";
+import{RendezvousClient,type ServerMessage}from"./rendezvous";
 import{HelperRtcSession}from"./rtc";
 
-export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:RendezvousClient;expiresAt:number;onEnded:()=>void}){
+export function RemoteConsole({rendezvous,expiresAt,onEnded,pendingSignals}:{rendezvous:RendezvousClient;expiresAt:number;onEnded:()=>void;pendingSignals:MutableRefObject<Extract<ServerMessage,{type:"signal"}>[]>}){
   const video=useRef<HTMLVideoElement>(null);
   const audio=useRef<HTMLAudioElement>(null);
   const pointer=useRef<{x:number;y:number;at:number}>();
   const pendingStream=useRef<MediaStream>();
+  const wheelGesture=useRef<{x:number;y:number;deltaX:number;deltaY:number;started:number;timer:number}>();
   const[connection,setConnection]=useState("connecting");
   const[controlReady,setControlReady]=useState(false);
   const[text,setText]=useState("");
@@ -67,16 +68,46 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
       else if(message.type==="ended")onEnded();
       else previous?.(message);
     };
+    // The helper screen mounts after the parent accepts the request. A quick
+    // parent tap can produce an offer before React installs this handler.
+    for(const signal of pendingSignals.current.splice(0))
+      void rtc.receive(signal.kind,signal.payload).catch(()=>setConnection("failed"));
     const expiry=window.setTimeout(onEnded,Math.max(0,expiresAt-Date.now()));
-    return()=>{window.clearTimeout(expiry);rendezvous.onMessage=previous;rtc.close();};
-  },[rtc,rendezvous,expiresAt,onEnded]);
+    return()=>{window.clearTimeout(expiry);if(wheelGesture.current)window.clearTimeout(wheelGesture.current.timer);rendezvous.onMessage=previous;rtc.close();};
+  },[rtc,rendezvous,expiresAt,onEnded,pendingSignals]);
 
-  const point=(event:React.PointerEvent<HTMLVideoElement>)=>{
-    const rect=event.currentTarget.getBoundingClientRect();
-    return videoPoint(event.clientX-rect.left,event.clientY-rect.top,rect.width,rect.height,event.currentTarget.videoWidth,event.currentTarget.videoHeight);
+  const point=(clientX:number,clientY:number,element:HTMLVideoElement)=>{
+    const rect=element.getBoundingClientRect();
+    return videoPoint(clientX-rect.left,clientY-rect.top,rect.width,rect.height,element.videoWidth,element.videoHeight);
   };
   const stop=()=>{rtc.close();rendezvous.close();onEnded();};
   const tapToPlay=()=>{const el=video.current;if(el&&el.paused)el.play().catch(()=>undefined);};
+  const scrollRemote=(event:React.WheelEvent<HTMLVideoElement>)=>{
+    if(!controlReady)return;
+    event.preventDefault();
+    const videoElement=event.currentTarget;
+    const start=point(event.clientX,event.clientY,event.currentTarget);
+    if(!start)return;
+    const existing=wheelGesture.current;
+    if(existing){
+      window.clearTimeout(existing.timer);
+      existing.deltaX+=event.deltaX;
+      existing.deltaY+=event.deltaY;
+    }else wheelGesture.current={...start,deltaX:event.deltaX,deltaY:event.deltaY,started:Date.now(),timer:0};
+    const gesture=wheelGesture.current;
+    if(!gesture)return;
+    gesture.timer=window.setTimeout(()=>{
+      if(wheelGesture.current!==gesture)return;
+      wheelGesture.current=undefined;
+      const rect=videoElement.getBoundingClientRect();
+      const dx=Math.max(-.7,Math.min(.7,gesture.deltaX/rect.width));
+      const dy=Math.max(-.7,Math.min(.7,gesture.deltaY/rect.height));
+      if(Math.hypot(dx,dy)<.025)return;
+      control.swipe(gesture.x,gesture.y,
+        Math.max(0,Math.min(1,gesture.x-dx)),Math.max(0,Math.min(1,gesture.y-dy)),
+        Math.max(80,Math.min(500,Date.now()-gesture.started)));
+    },100);
+  };
 
   return(
     <main className="console">
@@ -104,9 +135,10 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
           autoPlay
           playsInline
           muted
+          onContextMenu={event=>event.preventDefault()}
           onPointerDown={event=>{
-            if(!controlReady)return;
-            const p=point(event);
+            if(!controlReady||event.button!==0)return;
+            const p=point(event.clientX,event.clientY,event.currentTarget);
             if(!p)return;
             pointer.current={...p,at:Date.now()};
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -115,7 +147,7 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
             if(!controlReady){pointer.current=undefined;return;}
             const start=pointer.current;
             if(!start)return;
-            const end=point(event);
+            const end=point(event.clientX,event.clientY,event.currentTarget);
             pointer.current=undefined;
             if(!end)return;
             const elapsed=Date.now()-start.at,distance=Math.hypot(end.x-start.x,end.y-start.y);
@@ -125,9 +157,11 @@ export function RemoteConsole({rendezvous,expiresAt,onEnded}:{rendezvous:Rendezv
             pointer.current=undefined;
           }}
           onPointerCancel={()=>{pointer.current=undefined;}}
+          onWheel={scrollRemote}
         />
         {connection!=="connected"&&<p className="stage-hint">Waiting for the parent’s screen to appear…</p>}
       </section>
+      <p className="gesture-hint">On the phone screen: click to tap, click and drag to swipe, or use your mouse wheel or trackpad to scroll.</p>
       <nav>
         <button disabled={!controlReady} onClick={()=>control.action("BACK")}>Back</button>
         <button disabled={!controlReady} onClick={()=>control.action("HOME")}>Home</button>
